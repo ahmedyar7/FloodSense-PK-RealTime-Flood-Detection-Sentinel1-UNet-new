@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+data/images
+data/json
+outputs
+.streamlit
+.ipynb_checkpoints
+.vscode
+.idea

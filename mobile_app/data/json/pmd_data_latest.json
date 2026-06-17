@@ -1,0 +1,252 @@
+[
+    {
+        "station": "Balloki",
+        "river": "Ravi River",
+        "inflow": 31115,
+        "outflow": 4615,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Besham",
+        "river": "Indus River",
+        "inflow": 104700,
+        "outflow": 104700,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Chashma",
+        "river": "Indus River",
+        "inflow": 164940,
+        "outflow": 150056,
+        "status": "NORMAL",
+        "inflow_trend": "Falling",
+        "outflow_trend": "Rising",
+        "recorded": "09-Jun 08 PKT"
+    },
+    {
+        "station": "Ganda Singh Wala",
+        "river": "Sutlej River",
+        "inflow": 0,
+        "outflow": 0,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Guddu",
+        "river": "Indus River",
+        "inflow": 78664,
+        "outflow": 58146,
+        "status": "NORMAL",
+        "inflow_trend": "Rising",
+        "outflow_trend": "Rising",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Islam",
+        "river": "Sutlej River",
+        "inflow": 2200,
+        "outflow": 0,
+        "status": "NORMAL",
+        "inflow_trend": "Rising",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Jassar",
+        "river": "Ravi River",
+        "inflow": 919,
+        "outflow": 919,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Kala Bagh",
+        "river": "Indus River",
+        "inflow": 156000,
+        "outflow": 148500,
+        "status": "NORMAL",
+        "inflow_trend": "Falling",
+        "outflow_trend": "Falling",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Khanki",
+        "river": "Chenab River",
+        "inflow": 10452,
+        "outflow": 3732,
+        "status": "NORMAL",
+        "inflow_trend": "Rising",
+        "outflow_trend": "Rising",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Kotri",
+        "river": "Indus River",
+        "inflow": 11455,
+        "outflow": 0,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Mangla Dam",
+        "river": "Jhelum River",
+        "inflow": 32000,
+        "outflow": 25855,
+        "status": "NORMAL",
+        "inflow_trend": "Falling",
+        "outflow_trend": "Falling",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Marala",
+        "river": "Chenab River",
+        "inflow": 25007,
+        "outflow": 7000,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "New Rasul",
+        "river": "Jhelum River",
+        "inflow": 30183,
+        "outflow": 7990,
+        "status": "NORMAL",
+        "inflow_trend": "Rising",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Nowshera",
+        "river": "Kabul River",
+        "inflow": 43200,
+        "outflow": 43200,
+        "status": "NORMAL",
+        "inflow_trend": "Falling",
+        "outflow_trend": "Falling",
+        "recorded": "09-Jun 08 PKT"
+    },
+    {
+        "station": "Panjnad",
+        "river": "Chenab River",
+        "inflow": 12310,
+        "outflow": 0,
+        "status": "NORMAL",
+        "inflow_trend": "Rising",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Partab Bridge",
+        "river": "Indus River",
+        "inflow": 73000,
+        "outflow": 73000,
+        "status": "NORMAL",
+        "inflow_trend": "Falling",
+        "outflow_trend": "Falling",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Qadirabad",
+        "river": "Chenab River",
+        "inflow": 22361,
+        "outflow": 2836,
+        "status": "NORMAL",
+        "inflow_trend": "Rising",
+        "outflow_trend": "Rising",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Shahdara",
+        "river": "Ravi River",
+        "inflow": 4735,
+        "outflow": 4735,
+        "status": "NORMAL",
+        "inflow_trend": "Falling",
+        "outflow_trend": "Falling",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Sidhnai",
+        "river": "Ravi River",
+        "inflow": 12600,
+        "outflow": 0,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Skardu",
+        "river": "Indus River",
+        "inflow": 42300,
+        "outflow": 42300,
+        "status": "NORMAL",
+        "inflow_trend": "Falling",
+        "outflow_trend": "Falling",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Sukkur",
+        "river": "Indus River",
+        "inflow": 50620,
+        "outflow": 18500,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Sulemanki",
+        "river": "Sutlej River",
+        "inflow": 14965,
+        "outflow": 3075,
+        "status": "NORMAL",
+        "inflow_trend": "Rising",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Tarbela Dam",
+        "river": "Indus River",
+        "inflow": 89000,
+        "outflow": 130700,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 08 PKT"
+    },
+    {
+        "station": "Taunsa",
+        "river": "Indus River",
+        "inflow": 133563,
+        "outflow": 108047,
+        "status": "NORMAL",
+        "inflow_trend": "Steady",
+        "outflow_trend": "Steady",
+        "recorded": "09-Jun 06 PKT"
+    },
+    {
+        "station": "Trimmu",
+        "river": "Chenab River",
+        "inflow": 21153,
+        "outflow": 5553,
+        "status": "NORMAL",
+        "inflow_trend": "Falling",
+        "outflow_trend": "Falling",
+        "recorded": "09-Jun 06 PKT"
+    }
+]
