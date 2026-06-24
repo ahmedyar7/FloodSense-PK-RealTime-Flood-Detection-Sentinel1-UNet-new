@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-import io 
+import io
 import json
 import numpy as np
 import pandas as pd
@@ -15,22 +15,28 @@ from shapely.geometry import shape
 
 import matplotlib.pyplot as plt
 import pydeck as pdk
+from qdrant_client import QdrantClient
+from rag import EmbeddingPipeline, ingest_documents, rag_query
+
 
 def initialize_ee():
     try:
         if "gee" in st.secrets:
             import google.oauth2.service_account
+
             gee_creds = dict(st.secrets["gee"])
-            
+
             # Ensure the private key has correct newline characters
             if "private_key" in gee_creds:
                 # Handle both literal \n and real newlines
                 gee_creds["private_key"] = gee_creds["private_key"].replace("\\n", "\n")
-            
+
             # Modern Google OAuth2 credentials with explicit scope
             scopes = ["https://www.googleapis.com/auth/earthengine"]
-            credentials = google.oauth2.service_account.Credentials.from_service_account_info(
-                gee_creds, scopes=scopes
+            credentials = (
+                google.oauth2.service_account.Credentials.from_service_account_info(
+                    gee_creds, scopes=scopes
+                )
             )
             ee.Initialize(credentials, project=gee_creds.get("project_id"))
         else:
@@ -38,8 +44,11 @@ def initialize_ee():
             ee.Initialize()
     except Exception as e:
         st.error(f"EE initialization failed: {e}")
-        st.info("Please ensure your .streamlit/secrets.toml is correctly configured with [gee] credentials.")
+        st.info(
+            "Please ensure your .streamlit/secrets.toml is correctly configured with [gee] credentials."
+        )
         st.stop()
+
 
 initialize_ee()
 
@@ -47,8 +56,12 @@ from scrapers.ffc_scraper import get_ffc_data
 from engine.ai_alerts import FloodAI
 from models.model_inference import load_flood_model, predict_flood, resolve_weights_path
 from utils.ndwi import get_flood_mask, FLOOD_START, FLOOD_END
-from utils.districts import detect_name_column, shapely_to_ee, PRIORITY_DISTRICTS, flood_percent_for_district
-
+from utils.districts import (
+    detect_name_column,
+    shapely_to_ee,
+    PRIORITY_DISTRICTS,
+    flood_percent_for_district,
+)
 
 SHAPEFILE = "pakistan_districts.json"
 
@@ -137,6 +150,7 @@ def inject_dark_theme():
 
 inject_dark_theme()
 
+
 def preprocess_image(tif_bytes):
     """
     Accepts raw GeoTIFF bytes (single-band VV from GEE).
@@ -163,7 +177,7 @@ def preprocess_image(tif_bytes):
     # ── Channel 2: VH/VV ratio in linear scale ──
     vv_lin = np.power(10.0, np.clip(vv, -40, 0) / 10.0)
     vh_lin = np.power(10.0, np.clip(vh_approx, -45, -5) / 10.0)
-    ratio  = np.clip(vh_lin / (vv_lin + 1e-8), 0.0, 2.0) / 2.0
+    ratio = np.clip(vh_lin / (vv_lin + 1e-8), 0.0, 2.0) / 2.0
 
     img_norm = np.stack([ch0, ch1, ratio], axis=-1).astype(np.float32)  # (256,256,3)
 
@@ -181,7 +195,7 @@ def render_unet_overlay(display_arr, pred_mask):
     Works with any dimensions (256, 512, etc.)
     """
     h, w = display_arr.shape
-    
+
     # Standardize SAR to uint8 RGB
     sar_uint8 = (np.clip(display_arr, 0, 1) * 255).astype(np.uint8)
     sar_rgb = np.stack([sar_uint8, sar_uint8, sar_uint8], axis=-1)
@@ -197,7 +211,6 @@ def render_unet_overlay(display_arr, pred_mask):
     return out.astype(np.uint8)
 
 
-    
 def render_sar_gray(display_arr):
     """Render the preprocessed SAR grayscale."""
     sar_uint8 = (np.clip(display_arr, 0, 1) * 255).astype(np.uint8)
@@ -258,6 +271,20 @@ def load_districts_cached():
     return gdf[["__district_name__", "geometry"]], name_col
 
 
+@st.cache_resource
+def init_rag_system():
+    """Load and index all disaster knowledge documents into an in-memory Qdrant collection."""
+    client = QdrantClient(":memory:")
+    embedder = EmbeddingPipeline()
+    ingest_documents(client, embedder)
+    return client, embedder
+
+
+@st.cache_resource
+def get_flood_ai_cached():
+    return FloodAI()
+
+
 def match_station_to_district(district_name: str, river_flows: list[dict]):
     dn = district_name.lower().strip()
     # Prefer direct inclusion matches both ways.
@@ -266,6 +293,7 @@ def match_station_to_district(district_name: str, river_flows: list[dict]):
         if dn in st_name or st_name in dn:
             return row
     return None
+
 
 def fetch_current_sar_image(bbox, date_start, date_end, size=256):
     if isinstance(date_start, str):
@@ -299,12 +327,14 @@ def fetch_current_sar_image(bbox, date_start, date_end, size=256):
     masked_image = image.updateMask(slope_mask).unmask(0)
 
     # ✅ GeoTIFF — rasterio can read this properly
-    url = masked_image.getDownloadURL({
-        "region": bbox,
-        "dimensions": size,
-        "format": "GEO_TIFF",
-        "bands": ["VV"],
-    })
+    url = masked_image.getDownloadURL(
+        {
+            "region": bbox,
+            "dimensions": size,
+            "format": "GEO_TIFF",
+            "bands": ["VV"],
+        }
+    )
 
     # Increase timeout for large area exports
     res = requests.get(url, timeout=300)
@@ -313,39 +343,66 @@ def fetch_current_sar_image(bbox, date_start, date_end, size=256):
     print(f"  GeoTIFF downloaded: {len(res.content)} bytes")
     return res.content  # raw GeoTIFF bytes
 
+
 def fetch_2010_mask_image(mask_ee, bbox, size=256):
     """
     Fetches the 2010 binary mask as a PNG for visual comparison.
     """
     # mask_ee is 0 or 1. We'll visualize it as Blue.
     vis_img = mask_ee.visualize(palette=["black", "blue"], min=0, max=1)
-    
-    url = vis_img.getDownloadURL({
-        "region": bbox,
-        "dimensions": size,
-        "format": "png",
-    })
-    
+
+    url = vis_img.getDownloadURL(
+        {
+            "region": bbox,
+            "dimensions": size,
+            "format": "png",
+        }
+    )
+
     # Increase timeout for large area exports (e.g. National)
     res = requests.get(url, timeout=300)
     res.raise_for_status()
     return res.content
 
+
 # ── Station Coordinate Mapping ──
 STATION_COORDS = {
-    "Tarbela Dam": [34.08, 72.69], "Nowshera": [34.01, 71.97], "Besham": [34.92, 72.88],
-    "Kala Bagh": [32.96, 71.54], "Chashma": [32.44, 71.37], "Taunsa": [30.52, 70.84],
-    "Guddu": [28.42, 69.70], "Sukkur": [27.71, 68.85], "Kotri": [25.37, 68.31],
-    "Mangla Dam": [33.14, 73.64], "Marala": [32.67, 74.47], "Khanki": [32.41, 73.79],
-    "Qadirabad": [32.31, 73.53], "Trimmu": [31.14, 72.15], "Punjnad": [29.35, 71.02],
-    "Balloki": [31.22, 73.86], "Sidhnai": [30.57, 72.08], "Jassar": [32.11, 74.96],
-    "Sulemanki": [30.37, 73.87], "Islam": [29.83, 72.55], "Ganda Singh Wala": [31.11, 74.46]
+    "Tarbela Dam": [34.08, 72.69],
+    "Nowshera": [34.01, 71.97],
+    "Besham": [34.92, 72.88],
+    "Kala Bagh": [32.96, 71.54],
+    "Chashma": [32.44, 71.37],
+    "Taunsa": [30.52, 70.84],
+    "Guddu": [28.42, 69.70],
+    "Sukkur": [27.71, 68.85],
+    "Kotri": [25.37, 68.31],
+    "Mangla Dam": [33.14, 73.64],
+    "Marala": [32.67, 74.47],
+    "Khanki": [32.41, 73.79],
+    "Qadirabad": [32.31, 73.53],
+    "Trimmu": [31.14, 72.15],
+    "Punjnad": [29.35, 71.02],
+    "Balloki": [31.22, 73.86],
+    "Sidhnai": [30.57, 72.08],
+    "Jassar": [32.11, 74.96],
+    "Sulemanki": [30.37, 73.87],
+    "Islam": [29.83, 72.55],
+    "Ganda Singh Wala": [31.11, 74.46],
 }
 
 # ── River Flow Topology (Upstream -> Downstream) ──
 RIVER_PATHS = [
     # Indus Main
-    ["Tarbela Dam", "Besham", "Kala Bagh", "Chashma", "Taunsa", "Guddu", "Sukkur", "Kotri"],
+    [
+        "Tarbela Dam",
+        "Besham",
+        "Kala Bagh",
+        "Chashma",
+        "Taunsa",
+        "Guddu",
+        "Sukkur",
+        "Kotri",
+    ],
     # Kabul link
     ["Nowshera", "Kala Bagh"],
     # Jhelum link
@@ -357,17 +414,81 @@ RIVER_PATHS = [
     # Sutlej link
     ["Ganda Singh Wala", "Sulemanki", "Islam", "Punjnad"],
     # Panjnad to Indus
-    ["Punjnad", "Guddu"]
+    ["Punjnad", "Guddu"],
 ]
+
+
+def _rag_llm_fn(prompt: str) -> str:
+    """Call Gemini (primary) or Groq (fallback) to answer a RAG-augmented prompt."""
+    ai = get_flood_ai_cached()
+    result = ai._try_gemini(prompt)
+    if result:
+        return result
+    if ai.groq_enabled:
+        try:
+            resp = ai.groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+            )
+            return resp.choices[0].message.content
+        except Exception as e:
+            return f"Groq error: {e}"
+    return "AI service unavailable. Please configure GEMINI_API_KEY or GROQ_API_KEY."
+
+
+@st.fragment
+def render_rag_chatbot():
+    st.divider()
+    st.markdown("### Disaster Knowledge Assistant")
+    st.caption(
+        "Ask questions about Pakistan flood history, NDMA protocols, FFD river data, "
+        "and disaster response — powered by a RAG knowledge base."
+    )
+
+    rag_client, rag_embedder = init_rag_system()
+
+    if "rag_messages" not in st.session_state:
+        st.session_state["rag_messages"] = []
+
+    for msg in st.session_state["rag_messages"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    if user_input := st.chat_input("Ask about floods, NDMA protocols, or river systems..."):
+        st.session_state["rag_messages"].append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Searching knowledge base..."):
+                response, source_docs = rag_query(
+                    user_input, rag_client, rag_embedder, _rag_llm_fn
+                )
+            st.markdown(response)
+            if source_docs:
+                with st.expander("Sources", expanded=False):
+                    for doc in source_docs:
+                        st.caption(
+                            f"**{doc.get('source', 'Unknown')}** — {doc.get('title', '')}"
+                        )
+
+        st.session_state["rag_messages"].append(
+            {"role": "assistant", "content": response}
+        )
+
 
 def main():
     # ── Professional Executive Header ──
-    st.markdown("""
+    st.markdown(
+        """
         <div class="custom-header">
             <h1 class="header-title">FloodSense-PK</h1>
             <p class="header-subtitle">National Flood Intelligence & Early Warning System</p>
         </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     gdf, _ = load_districts_cached()
 
@@ -375,30 +496,48 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Analysis Scale")
     analysis_scale = st.sidebar.selectbox(
-        "Select Scope", 
+        "Select Scope",
         ["District", "Province", "National"],
-        help="National/Province will provide a Low-Res Overview of the entire region."
+        help="National/Province will provide a Low-Res Overview of the entire region.",
     )
 
     if analysis_scale == "National":
         district = "Pakistan"
     elif analysis_scale == "Province":
-        prov_opts = sorted(["Punjab", "Sindh", "Khyber Pakhtunkhwa", "Balochistan", "Azad Jammu & Kashmir", "Gilgit-Baltistan"])
+        prov_opts = sorted(
+            [
+                "Punjab",
+                "Sindh",
+                "Khyber Pakhtunkhwa",
+                "Balochistan",
+                "Azad Jammu & Kashmir",
+                "Gilgit-Baltistan",
+            ]
+        )
         district = st.sidebar.selectbox("Select Province", prov_opts)
     else:
         # District picker
         priority_only = st.sidebar.checkbox("Use Priority Districts only", value=True)
         if priority_only:
             opts = sorted(
-                {x for x in gdf["__district_name__"].tolist() if any(p.lower() in x.lower() for p in PRIORITY_DISTRICTS)}
+                {
+                    x
+                    for x in gdf["__district_name__"].tolist()
+                    if any(p.lower() in x.lower() for p in PRIORITY_DISTRICTS)
+                }
             )
         else:
             opts = sorted({x for x in gdf["__district_name__"].tolist()})
-        district = st.sidebar.selectbox("District (Pre-defined)", options=opts, index=0 if opts else 0)
-    
+        district = st.sidebar.selectbox(
+            "District (Pre-defined)", options=opts, index=0 if opts else 0
+        )
+
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Advanced: Search Custom Area")
-    search_name = st.sidebar.text_input("Enter Area Name (Overrides Scale)", help="Type a city or tehsil name. If found, it will override the scale selection.")
+    search_name = st.sidebar.text_input(
+        "Enter Area Name (Overrides Scale)",
+        help="Type a city or tehsil name. If found, it will override the scale selection.",
+    )
 
     # Date range
     default_end = datetime.now().date()
@@ -418,42 +557,59 @@ def main():
     # ── Geometry Resolution ──
     geom = None
     display_name = district
-    
+
     if search_name.strip():
-        with st.spinner(f"Searching for '{search_name}' in Pakistan (Districts/Tehsils)..."):
+        with st.spinner(
+            f"Searching for '{search_name}' in Pakistan (Districts/Tehsils)..."
+        ):
             # Use FAO GAUL Level 2, filtered specifically for Pakistan
-            pakistan_fc = ee.FeatureCollection("FAO/GAUL/2015/level2") \
-                            .filter(ee.Filter.eq("ADM0_NAME", "Pakistan"))
-            
+            pakistan_fc = ee.FeatureCollection("FAO/GAUL/2015/level2").filter(
+                ee.Filter.eq("ADM0_NAME", "Pakistan")
+            )
+
             search_term = search_name.strip()
             # 1. Try exact match in ADM2_NAME (Districts/Sub-districts)
-            match = pakistan_fc.filter(ee.Filter.eq("ADM2_NAME", search_term.capitalize()))
-            
+            match = pakistan_fc.filter(
+                ee.Filter.eq("ADM2_NAME", search_term.capitalize())
+            )
+
             # 2. Try partial match if exact fails
             if match.size().getInfo() == 0:
-                match = pakistan_fc.filter(ee.Filter.stringContains("ADM2_NAME", search_term))
-            
+                match = pakistan_fc.filter(
+                    ee.Filter.stringContains("ADM2_NAME", search_term)
+                )
+
             # 3. Last fallback: search for Provinces/Regions
             if match.size().getInfo() == 0:
-                prov_fc = ee.FeatureCollection("FAO/GAUL/2015/level1").filter(ee.Filter.eq("ADM0_NAME", "Pakistan"))
-                match = prov_fc.filter(ee.Filter.stringContains("ADM1_NAME", search_term))
+                prov_fc = ee.FeatureCollection("FAO/GAUL/2015/level1").filter(
+                    ee.Filter.eq("ADM0_NAME", "Pakistan")
+                )
+                match = prov_fc.filter(
+                    ee.Filter.stringContains("ADM1_NAME", search_term)
+                )
 
             if match.size().getInfo() > 0:
                 feat = match.first()
                 props = feat.toDictionary().getInfo()
                 # Get the official administrative name (Tehsil/District)
-                official_name = props.get("ADM2_NAME") or props.get("ADM1_NAME") or search_term
-                
+                official_name = (
+                    props.get("ADM2_NAME") or props.get("ADM1_NAME") or search_term
+                )
+
                 geom = shape(feat.geometry().getInfo())
                 display_name = f"{official_name} (Search)"
                 st.sidebar.success(f"Verified Area: {official_name}")
             else:
-                st.sidebar.warning(f"'{search_name}' not found. Using selection instead.")
-    
+                st.sidebar.warning(
+                    f"'{search_name}' not found. Using selection instead."
+                )
+
     if geom is None:
         if analysis_scale == "National":
             # Pakistan full boundary
-            country = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017").filter(ee.Filter.eq("country_na", "Pakistan"))
+            country = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017").filter(
+                ee.Filter.eq("country_na", "Pakistan")
+            )
             if country.size().getInfo() > 0:
                 geom = shape(country.first().geometry().getInfo())
                 display_name = "Pakistan (National)"
@@ -461,15 +617,17 @@ def main():
                 st.error("Could not fetch National boundary from GEE.")
         elif analysis_scale == "Province":
             # FAO Level 1 for provinces - use robust matching
-            prov_fc = ee.FeatureCollection("FAO/GAUL/2015/level1").filter(ee.Filter.eq("ADM0_NAME", "Pakistan"))
+            prov_fc = ee.FeatureCollection("FAO/GAUL/2015/level1").filter(
+                ee.Filter.eq("ADM0_NAME", "Pakistan")
+            )
             match = prov_fc.filter(ee.Filter.stringContains("ADM1_NAME", district))
-            
+
             if match.size().getInfo() > 0:
                 geom = shape(match.first().geometry().getInfo())
                 display_name = f"{district} (Province)"
             else:
                 st.error(f"Could not find Province boundary for '{district}' in GEE.")
-        
+
         # Final fallback if GEE fails or for standard District mode
         if geom is None:
             # Dropdown district
@@ -484,26 +642,26 @@ def main():
 
     ee_geom = shapely_to_ee(geom)
     district = display_name
-    
+
     # Calculate bbox
     minx, miny, maxx, maxy = geom.bounds
     w_deg = maxx - minx
     h_deg = maxy - miny
     buffer_percent = 0.05 if analysis_scale in ["Province", "National"] else 0.15
     bbox = [
-        minx - w_deg * buffer_percent, 
-        miny - h_deg * buffer_percent, 
-        maxx + w_deg * buffer_percent, 
-        maxy + h_deg * buffer_percent
+        minx - w_deg * buffer_percent,
+        miny - h_deg * buffer_percent,
+        maxx + w_deg * buffer_percent,
+        maxy + h_deg * buffer_percent,
     ]
-    
+
     # ── Dynamic Resolution Calculation ──
     # Target resolution: ~1000m for National/Province, ~80m for District
     target_res_m = 1000 if analysis_scale in ["Province", "National"] else 80
-    
+
     pixels_w = int((w_deg * 1.1) * 111000 / target_res_m)
     pixels_h = int((h_deg * 1.1) * 111000 / target_res_m)
-    
+
     # GEE Limits: 1024 is safe for memory and speed
     final_size = max(256, min(1024, max(pixels_w, pixels_h)))
 
@@ -515,7 +673,9 @@ def main():
             st.session_state["hist_flood_mask"] = hist_flood_mask
 
     with st.spinner("Computing 2010 flood %..."):
-        pct_2010 = flood_percent_for_district(ee_geom, st.session_state["hist_flood_mask"])
+        pct_2010 = flood_percent_for_district(
+            ee_geom, st.session_state["hist_flood_mask"]
+        )
 
     # 2) Current (Sentinel-1 + U-Net)
     model = load_model_cached()
@@ -524,7 +684,7 @@ def main():
             bbox=bbox,
             date_start=str(start_date),
             date_end=str(end_date),
-            size=final_size
+            size=final_size,
         )
 
     with st.spinner("Running Tiled UNet analysis..."):
@@ -553,18 +713,22 @@ def main():
             {
                 "flood_pct_current": pct_current,
                 "flood_pct_2010": pct_2010,
-                "river_status": matched_station["status"] if matched_station else "UNKNOWN"
+                "river_status": (
+                    matched_station["status"] if matched_station else "UNKNOWN"
+                ),
             },
-            river_flows
+            river_flows,
         )
-        
+
         summary_for_ai = [
             {
                 "district": district,
                 "flood_pct_current": pct_current,
                 "flood_pct_2010": pct_2010,
                 "risk_score": risk_score,
-                "river_status": matched_station["status"] if matched_station else "UNKNOWN",
+                "river_status": (
+                    matched_station["status"] if matched_station else "UNKNOWN"
+                ),
                 "settlement_risk": settlement_risk,
             }
         ]
@@ -572,37 +736,46 @@ def main():
 
     # 5) Visuals
     sar_gray = render_sar_gray(unet_result["display_arr"])
-    overlay_img = render_unet_overlay(unet_result["display_arr"], unet_result["pred_mask"])
+    overlay_img = render_unet_overlay(
+        unet_result["display_arr"], unet_result["pred_mask"]
+    )
     prob_heatmap = render_prob_heatmap(unet_result["pred_prob"])
 
     with st.spinner("Aligning 2010 historical visuals..."):
         hist_mask_bytes = fetch_2010_mask_image(
-            st.session_state["hist_flood_mask"],
-            bbox=bbox,
-            size=final_size
+            st.session_state["hist_flood_mask"], bbox=bbox, size=final_size
         )
 
     st.divider()
 
     # Clean, non-overlapping UI using tabs
-    t1, t2, t3, t4 = st.tabs(["Overview", "Detection", "River Flows", "AI Intelligence"])
-
+    t1, t2, t3, t4 = st.tabs(
+        ["Overview", "Detection", "River Flows", "AI Intelligence"]
+    )
 
     with t1:
         st.subheader("Flood Severity Comparison: 2010 vs. Current")
         st.markdown("""
         Evidence-based comparison between the historical maximum (2010) and current AI detection. 
         """)
-        
+
         # ── Visual Comparison Section ──
         col_img1, col_img2 = st.columns(2)
         with col_img1:
             st.markdown("#### **[A] 2010 Historical Baseline**")
-            st.image(hist_mask_bytes, caption="Satellite: Landsat-5 | Method: MNDWI", width='stretch')
+            st.image(
+                hist_mask_bytes,
+                caption="Satellite: Landsat-5 | Method: MNDWI",
+                width="stretch",
+            )
             st.info("2010 Context: Peak flood footprint during the 2010 disaster.")
         with col_img2:
             st.markdown(f"#### **[B] Current Situation ({start_date})**")
-            st.image(overlay_img, caption="Satellite: Sentinel-1 SAR | Method: UNet AI", use_container_width=True)
+            st.image(
+                overlay_img,
+                caption="Satellite: Sentinel-1 SAR | Method: UNet AI",
+                use_container_width=True,
+            )
             st.info("Live Status: Latest available radar-based water detection.")
 
         st.divider()
@@ -610,25 +783,25 @@ def main():
         # ── Metrics Section ──
         st.subheader("Statistical Analysis")
         c1, c2, c3 = st.columns(3)
-        
+
         c1.metric(
-            "2010 HISTORICAL %", 
+            "2010 HISTORICAL %",
             f"{pct_2010:.2f}%",
-            help="Total district area flooded in 2010."
+            help="Total district area flooded in 2010.",
         )
         c2.metric(
-            "CURRENT FLOOD %", 
+            "CURRENT FLOOD %",
             f"{pct_current:.2f}%",
-            help="Current area flooded as detected by Sentinel-1/UNet."
+            help="Current area flooded as detected by Sentinel-1/UNet.",
         )
-        
+
         delta = float(pct_current) - float(pct_2010)
         c3.metric(
-            "DELTA SEVERITY", 
-            f"{delta:+.2f}%", 
-            delta=f"{delta:+.2f}%", 
+            "DELTA SEVERITY",
+            f"{delta:+.2f}%",
+            delta=f"{delta:+.2f}%",
             delta_color="inverse",
-            help="Current % - 2010 %. Positive means worse than 2010."
+            help="Current % - 2010 %. Positive means worse than 2010.",
         )
 
         st.markdown(f"""
@@ -636,7 +809,7 @@ def main():
         *   **Defensible Risk Score:** **{risk_score}/10** (Computed via Weighted Multi-Factor Analysis)
         *   **Comparative Severity:** Current flooding is **{ (pct_current / (pct_2010 if pct_2010 > 0 else 1)) * 100:.1f}%** of the 2010 benchmark.
         """)
-        
+
         st.progress(min(1.0, risk_score / 10.0))
 
         st.divider()
@@ -651,31 +824,43 @@ def main():
             otrend = matched_station.get("outflow_trend", "Steady")
             i_icon = "↑" if "Rising" in itrend else "↓" if "Falling" in itrend else "→"
             o_icon = "↑" if "Rising" in otrend else "↓" if "Falling" in otrend else "→"
-            
+
             st.caption(
                 f"**Inflow:** {matched_station.get('inflow')} {i_icon} ({itrend}) | "
                 f"**Outflow:** {matched_station.get('outflow')} {o_icon} ({otrend})"
             )
             st.caption(f"Last Updated: {matched_station.get('recorded', 'N/A')}")
         else:
-            st.warning("⚠️ **Data Gap:** No hydraulic monitoring station found for this district boundary. Confidence in river status is reduced.")
+            st.warning(
+                "⚠️ **Data Gap:** No hydraulic monitoring station found for this district boundary. Confidence in river status is reduced."
+            )
 
     with t2:
         st.subheader("UNet Deep Learning Analysis")
         st.caption("Detailed breakdown of AI model outputs and confidence levels.")
 
         col_a, col_b = st.columns(2)
-        
+
         with col_a:
             st.markdown("#### **Unified Detection Mask**")
             one_diagram = render_unet_one_diagram(
-                unet_result["display_arr"], unet_result["pred_prob"], unet_result["pred_mask"]
+                unet_result["display_arr"],
+                unet_result["pred_prob"],
+                unet_result["pred_mask"],
             )
-            st.image(one_diagram, caption="Combined SAR + Probability + Mask", use_container_width=True)
-        
+            st.image(
+                one_diagram,
+                caption="Combined SAR + Probability + Mask",
+                use_container_width=True,
+            )
+
         with col_b:
             st.markdown("#### **Confidence Heatmap**")
-            st.image(prob_heatmap, caption="AI Probability Score (0.0 to 1.0)", use_container_width=True)
+            st.image(
+                prob_heatmap,
+                caption="AI Probability Score (0.0 to 1.0)",
+                use_container_width=True,
+            )
 
         st.divider()
         st.markdown("### Model Performance Metrics")
@@ -705,30 +890,60 @@ def main():
             df_plot = df_flows.copy()
             df_plot["inflow"] = pd.to_numeric(df_plot["inflow"], errors="coerce")
             df_plot["outflow"] = pd.to_numeric(df_plot["outflow"], errors="coerce")
-            
-            top_in = df_plot.dropna(subset=["inflow"]).sort_values("inflow", ascending=False).head(10)
-            top_out = df_plot.dropna(subset=["outflow"]).sort_values("outflow", ascending=False).head(10)
+
+            top_in = (
+                df_plot.dropna(subset=["inflow"])
+                .sort_values("inflow", ascending=False)
+                .head(10)
+            )
+            top_out = (
+                df_plot.dropna(subset=["outflow"])
+                .sort_values("outflow", ascending=False)
+                .head(10)
+            )
 
             col_c1, col_c2 = st.columns(2)
             with col_c1:
                 st.caption("Top Inflow Stations")
                 if not top_in.empty:
-                    st.bar_chart(top_in.set_index("station")["inflow"], color="#3366cc", use_container_width=True)
+                    st.bar_chart(
+                        top_in.set_index("station")["inflow"],
+                        color="#3366cc",
+                        use_container_width=True,
+                    )
             with col_c2:
                 st.caption("Top Outflow Stations")
                 if not top_out.empty:
-                    st.bar_chart(top_out.set_index("station")["outflow"], color="#dc3912", use_container_width=True)
+                    st.bar_chart(
+                        top_out.set_index("station")["outflow"],
+                        color="#dc3912",
+                        use_container_width=True,
+                    )
 
             st.divider()
-            
+
             st.markdown("#### **Inflow vs. Outflow Correlation**")
             df_sc = df_plot.dropna(subset=["inflow", "outflow"]).copy()
             if len(df_sc) > 0:
                 fig, ax = plt.subplots(figsize=(10, 4))
-                colors = {"NORMAL": "#109618", "HIGH": "#ff9900", "EXTREME": "#ff0000", "NOT_RECEIVED": "#7b8794", "UNKNOWN": "#8aa5ff"}
+                colors = {
+                    "NORMAL": "#109618",
+                    "HIGH": "#ff9900",
+                    "EXTREME": "#ff0000",
+                    "NOT_RECEIVED": "#7b8794",
+                    "UNKNOWN": "#8aa5ff",
+                }
                 for status, g in df_sc.groupby(df_sc["status"].astype(str)):
-                    ax.scatter(g["inflow"], g["outflow"], s=45, alpha=0.7, label=status, color=colors.get(status, "#8aa5ff"), edgecolors='white')
-                
+                    ax.scatter(
+                        g["inflow"],
+                        g["outflow"],
+                        s=45,
+                        alpha=0.7,
+                        label=status,
+                        color=colors.get(status, "#8aa5ff"),
+                        edgecolors="white",
+                    )
+
                 ax.set_xlabel("Inflow (Cusecs)", fontsize=9)
                 ax.set_ylabel("Outflow (Cusecs)", fontsize=9)
                 ax.legend(fontsize=8, title="Station Status")
@@ -736,7 +951,9 @@ def main():
                 st.pyplot(fig, use_container_width=True)
 
             st.markdown("#### **Native Pakistan River Monitoring Map**")
-            st.caption("Interactive hydraulic network visualizing current barrage and dam status.")
+            st.caption(
+                "Interactive hydraulic network visualizing current barrage and dam status."
+            )
 
             # Prepare data for Pydeck Map
             map_data = []
@@ -744,24 +961,28 @@ def main():
                 # Use hardcoded coords if scraper lacks them
                 coords = STATION_COORDS.get(d["station"])
                 if coords:
-                    color = [16, 150, 24, 200] # Normal (Green)
-                    if d["status"] == "HIGH": color = [255, 153, 0, 200] # Warning (Orange)
-                    elif d["status"] == "EXTREME": color = [255, 0, 0, 200] # Critical (Red)
-                    
-                    map_data.append({
-                        "name": d["station"],
-                        "river": d["river"],
-                        "inflow": d["inflow"],
-                        "outflow": d["outflow"],
-                        "status": d["status"],
-                        "latitude": coords[0],
-                        "longitude": coords[1],
-                        "color": color
-                    })
-            
+                    color = [16, 150, 24, 200]  # Normal (Green)
+                    if d["status"] == "HIGH":
+                        color = [255, 153, 0, 200]  # Warning (Orange)
+                    elif d["status"] == "EXTREME":
+                        color = [255, 0, 0, 200]  # Critical (Red)
+
+                    map_data.append(
+                        {
+                            "name": d["station"],
+                            "river": d["river"],
+                            "inflow": d["inflow"],
+                            "outflow": d["outflow"],
+                            "status": d["status"],
+                            "latitude": coords[0],
+                            "longitude": coords[1],
+                            "color": color,
+                        }
+                    )
+
             if map_data:
                 df_map = pd.DataFrame(map_data)
-                
+
                 # Convert RIVER_PATHS names to coordinate paths
                 flow_paths = []
                 for path_names in RIVER_PATHS:
@@ -791,7 +1012,7 @@ def main():
                     flow_paths,
                     width_min_pixels=3,
                     get_path="path",
-                    get_color=[51, 102, 204, 180], # Blue flow links
+                    get_color=[51, 102, 204, 180],  # Blue flow links
                     pickable=True,
                 )
 
@@ -804,19 +1025,27 @@ def main():
                     get_radius=15000,
                     pickable=True,
                 )
-                
-                view_state = pdk.ViewState(latitude=30.0, longitude=70.0, zoom=5, pitch=0)
-                
-                st.pydeck_chart(pdk.Deck(
-                    map_style=None,
-                    initial_view_state=view_state,
-                    layers=[base_layer, path_layer, station_layer],
-                    tooltip={"text": "{name} ({river})\nStatus: {status}\nInflow: {inflow}\nOutflow: {outflow}"}
-                ), use_container_width=True)
+
+                view_state = pdk.ViewState(
+                    latitude=30.0, longitude=70.0, zoom=5, pitch=0
+                )
+
+                st.pydeck_chart(
+                    pdk.Deck(
+                        map_style=None,
+                        initial_view_state=view_state,
+                        layers=[base_layer, path_layer, station_layer],
+                        tooltip={
+                            "text": "{name} ({river})\nStatus: {status}\nInflow: {inflow}\nOutflow: {outflow}"
+                        },
+                    ),
+                    use_container_width=True,
+                )
             else:
                 st.warning("No station coordinates available to render the map.")
 
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div style='text-align: right; padding: 10px;'>
                 <a href='https://ffd.pmd.gov.pk/river-state' target='_blank'>
                     <button style='background-color: transparent; color: #8aa5ff; padding: 5px 15px; border: 1px solid #8aa5ff; border-radius: 5px; cursor: pointer; font-size: 0.8em;'>
@@ -824,7 +1053,9 @@ def main():
                     </button>
                 </a>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
             st.divider()
             st.markdown("#### **Raw Hydraulic Data Table**")
@@ -832,15 +1063,22 @@ def main():
 
     with t4:
         st.subheader("Gemini AI: Tactical Intelligence Report")
-        st.caption("Evidence-based operational recommendations derived from spatial and hydraulic metrics.")
-        
+        st.caption(
+            "Evidence-based operational recommendations derived from spatial and hydraulic metrics."
+        )
+
         # ── Risk Visual Overview ──
         c_risk1, c_risk2 = st.columns([1, 2])
         with c_risk1:
             st.metric("COMPOSITE RISK", f"{risk_score}/10")
-            risk_color = "red" if risk_score > 7 else "orange" if risk_score > 4 else "green"
-            st.markdown(f"<div style='height:15px; width:100%; background-color:{risk_color}; border-radius:10px;'></div>", unsafe_allow_html=True)
-            
+            risk_color = (
+                "red" if risk_score > 7 else "orange" if risk_score > 4 else "green"
+            )
+            st.markdown(
+                f"<div style='height:15px; width:100%; background-color:{risk_color}; border-radius:10px;'></div>",
+                unsafe_allow_html=True,
+            )
+
         with c_risk2:
             conf_level = "HIGH" if matched_station else "MEDIUM (Data Gaps)"
             st.info(f"Report Fidelity: **{conf_level}**")
@@ -852,8 +1090,9 @@ def main():
             lines = insights.split("\n")
             for line in lines:
                 line = line.strip()
-                if not line: continue
-                
+                if not line:
+                    continue
+
                 if "[SITUATION" in line.upper():
                     st.markdown(f"#### 📡 Situation Summary")
                     st.info(line.split("]")[-1].strip())
@@ -872,9 +1111,12 @@ def main():
             st.markdown(insights)
 
         st.divider()
-        st.caption(f"Governance: Weighted Risk Formula (Flood% 40, Delta 30, Hydraulic 30)")
+        st.caption(
+            f"Governance: Weighted Risk Formula (Flood% 40, Delta 30, Hydraulic 30)"
+        )
+
+        render_rag_chatbot()
 
 
 if __name__ == "__main__":
     main()
-
