@@ -62,8 +62,89 @@ from utils.districts import (
     PRIORITY_DISTRICTS,
     flood_percent_for_district,
 )
+from agent import (
+    RiskLevel,
+    FloodState,
+    evaluate_safe_zones,
+    recommend_safe_zone,
+    plan_route,
+    send_flood_alert,
+    EmailConfigError,
+)
+from agent.mock_osm import MOCK_SAFE_ZONE_CANDIDATES, MOCK_ROAD_GRAPH
 
 SHAPEFILE = "pakistan_districts.json"
+
+# Rough rural population density (people/km²) used to estimate population-at-risk
+# for the authority-style situation summary in the alert email.
+ESTIMATED_POP_DENSITY_PER_KM2 = 350
+
+
+def _risk_level_from_score(score: float) -> RiskLevel:
+    """Map the 1–10 defensible risk score onto the platform's risk bands."""
+    if score >= 7:
+        return RiskLevel.HIGH_RISK
+    if score >= 4:
+        return RiskLevel.MODERATE_RISK
+    return RiskLevel.LOW_RISK
+
+
+def _maybe_send_flood_alert(
+    recipient_email, always_email, district, risk_score, coverage_pct, affected_area_km2
+):
+    """Email a personalised evacuation alert when the area is in danger.
+
+    Auto-sends on HIGH risk; the ``always_email`` opt-in forces a send at any
+    level. Safe-zone and routing data come from the mock OSM module (PR 3).
+    """
+    recipient_email = (recipient_email or "").strip()
+    if not recipient_email:
+        return
+
+    risk_level = _risk_level_from_score(risk_score)
+    if risk_level != RiskLevel.HIGH_RISK and not always_email:
+        st.info(
+            f"📭 No alert email sent — current risk for {district} is "
+            f"**{risk_level.value}**. Tick *“Email me regardless of risk level”* "
+            "in the sidebar to receive it anyway."
+        )
+        return
+
+    safe_zone = recommend_safe_zone(MOCK_SAFE_ZONE_CANDIDATES)
+    if safe_zone is None:
+        st.error("No safe zone currently available to recommend; alert not sent.")
+        return
+
+    route = plan_route(MOCK_ROAD_GRAPH, origin="Origin", destination="Hospital")
+    flood_state = FloodState(
+        district=district,
+        flood_coverage_percentage=min(float(coverage_pct), 100.0),
+        affected_area_km2=float(affected_area_km2),
+        population_at_risk=int(float(affected_area_km2) * ESTIMATED_POP_DENSITY_PER_KM2),
+        available_shelters=len(evaluate_safe_zones(MOCK_SAFE_ZONE_CANDIDATES)),
+    )
+
+    try:
+        with st.spinner(f"Sending flood alert to {recipient_email}…"):
+            send_flood_alert(
+                recipient=recipient_email,
+                risk_level=risk_level,
+                flood_state=flood_state,
+                safe_zone=safe_zone,
+                route=route,
+            )
+        st.success(
+            f"✅ Flood alert emailed to **{recipient_email}** — directing them to "
+            f"**{safe_zone.name}** "
+            f"({safe_zone.latitude:.5f}, {safe_zone.longitude:.5f}), "
+            f"{route.distance_km:g} km, ~{route.estimated_travel_time_min} min."
+        )
+    except EmailConfigError as e:
+        st.error(
+            f"⚠️ Email not configured, alert not sent: {e}"
+        )
+    except Exception as e:  # network/auth/SMTP errors must not crash the dashboard
+        st.error(f"⚠️ Failed to send alert email to {recipient_email}: {e}")
 
 st.set_page_config(page_title="FloodSense-PK Dashboard", layout="wide")
 
@@ -545,6 +626,22 @@ def main():
     start_date = st.sidebar.date_input("Current SAR start date", value=default_start)
     end_date = st.sidebar.date_input("Current SAR end date", value=default_end)
 
+    # Personal flood-alert subscription
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔔 Personal Flood Alert")
+    recipient_email = st.sidebar.text_input(
+        "Your email (optional)",
+        help=(
+            "If this area is in danger, we'll email you the situation, the nearest "
+            "safe zone with exact coordinates, and the estimated travel time."
+        ),
+    )
+    always_email = st.sidebar.checkbox(
+        "Email me regardless of risk level[FOR TESTING ONLY]",
+        value=False,
+        help="Otherwise you are only emailed when the risk is HIGH.",
+    )
+
     # Actions
     with st.sidebar:
         st.markdown("### Run")
@@ -733,6 +830,16 @@ def main():
             }
         ]
         insights = ai.generate_insights(summary_for_ai, river_flows)
+
+    # 4b) Personal flood-alert email (Response & Communication Agent)
+    _maybe_send_flood_alert(
+        recipient_email=recipient_email,
+        always_email=always_email,
+        district=district,
+        risk_score=risk_score,
+        coverage_pct=pct_current,
+        affected_area_km2=unet_result.get("affected_area_km2", 0.0),
+    )
 
     # 5) Visuals
     sar_gray = render_sar_gray(unet_result["display_arr"])

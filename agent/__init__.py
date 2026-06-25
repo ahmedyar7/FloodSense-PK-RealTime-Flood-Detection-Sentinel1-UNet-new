@@ -9,6 +9,28 @@ from .schemas import (
     RiverStatus,
 )
 from .disaster_agent import assess_risk, classify_risk
+from .response_schemas import (
+    LocationType,
+    SafeZoneCandidate,
+    GraphEdge,
+    EvacuationRoute,
+    FloodState,
+)
+from .response_agent import (
+    is_safe_zone,
+    evaluate_safe_zones,
+    recommend_safe_zone,
+    plan_route,
+    generate_citizen_alert,
+    generate_authority_alert,
+)
+from .email_notifier import (
+    SMTPConfig,
+    EmailConfigError,
+    build_alert_email,
+    send_flood_alert,
+    maps_link,
+)
 
 __all__ = [
     "SatelliteIntelligence",
@@ -21,4 +43,21 @@ __all__ = [
     "RiverStatus",
     "assess_risk",
     "classify_risk",
+    # Response & Communication Agent (PR 3)
+    "LocationType",
+    "SafeZoneCandidate",
+    "GraphEdge",
+    "EvacuationRoute",
+    "FloodState",
+    "is_safe_zone",
+    "evaluate_safe_zones",
+    "recommend_safe_zone",
+    "plan_route",
+    "generate_citizen_alert",
+    "generate_authority_alert",
+    "SMTPConfig",
+    "EmailConfigError",
+    "build_alert_email",
+    "send_flood_alert",
+    "maps_link",
 ]
