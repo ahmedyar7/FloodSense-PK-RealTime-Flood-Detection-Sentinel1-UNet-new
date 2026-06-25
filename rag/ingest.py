@@ -4,8 +4,21 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 
 from .embeddings import VECTOR_SIZE
 from .mock_documents import MOCK_DOCUMENTS
+from .pdf_loader import DEFAULT_PDF, load_pdf_documents
 
 COLLECTION_NAME = "flood_knowledge"
+
+
+def load_default_documents() -> list[dict]:
+    """
+    Build the default knowledge corpus: the structured FloodSense-PK PDF plus
+    the legacy mock disaster documents. Falls back to mock-only if the PDF is
+    unavailable so ingestion never hard-fails on a missing file.
+    """
+    documents = list(MOCK_DOCUMENTS)
+    if DEFAULT_PDF.exists():
+        documents = load_pdf_documents(DEFAULT_PDF) + documents
+    return documents
 
 
 def chunk_text(text: str, chunk_size: int = 150, overlap: int = 20) -> list[str]:
@@ -39,7 +52,7 @@ def ingest_documents(
 ) -> int:
     """Chunk documents, embed each chunk, and upsert into Qdrant. Returns chunk count."""
     if documents is None:
-        documents = MOCK_DOCUMENTS
+        documents = load_default_documents()
 
     ensure_collection(client, collection_name)
 
