@@ -62,8 +62,175 @@ from utils.districts import (
     PRIORITY_DISTRICTS,
     flood_percent_for_district,
 )
+from agent import (
+    RiskLevel,
+    FloodState,
+    evaluate_safe_zones,
+    recommend_safe_zone,
+    send_flood_alert,
+    EmailConfigError,
+    fetch_osm_safe_zones,
+    build_safe_zone_candidates,
+    straight_line_route,
+)
 
 SHAPEFILE = "pakistan_districts.json"
+
+# Rough rural population density (people/km²) used to estimate population-at-risk
+# for the authority-style situation summary in the alert email.
+ESTIMATED_POP_DENSITY_PER_KM2 = 350
+
+
+def _risk_level_from_score(score: float) -> RiskLevel:
+    """Map the 1–10 defensible risk score onto the platform's risk bands."""
+    if score >= 7:
+        return RiskLevel.HIGH_RISK
+    if score >= 4:
+        return RiskLevel.MODERATE_RISK
+    return RiskLevel.LOW_RISK
+
+
+def _sample_elevations(points):
+    """Return SRTM ground elevation (m) for each ``(lat, lon)`` point.
+
+    Uses one Earth Engine ``reduceRegions`` call over USGS SRTM. Returns a list
+    parallel to ``points``; an entry is ``None`` when the sample is unavailable
+    (the caller then falls back to a safe default elevation).
+    """
+    if not points:
+        return []
+    try:
+        feats = [
+            ee.Feature(ee.Geometry.Point([lon, lat]), {"idx": i})
+            for i, (lat, lon) in enumerate(points)
+        ]
+        fc = ee.FeatureCollection(feats)
+        srtm = ee.Image("USGS/SRTMGL1_003")
+        sampled = srtm.reduceRegions(
+            collection=fc, reducer=ee.Reducer.first(), scale=30
+        ).getInfo()
+        elev_by_idx = {}
+        for f in sampled.get("features", []):
+            props = f.get("properties", {})
+            elev_by_idx[props.get("idx")] = props.get("first")
+        return [elev_by_idx.get(i) for i in range(len(points))]
+    except Exception as e:  # elevation is best-effort; never block the alert
+        print(f"Elevation sampling failed: {e}")
+        return [None] * len(points)
+
+
+def _maybe_send_flood_alert(
+    recipient_email,
+    always_email,
+    district,
+    risk_score,
+    coverage_pct,
+    affected_area_km2,
+    geom,
+    bbox,
+    pred_mask,
+):
+    """Email a personalised evacuation alert when the area is in danger.
+
+    Auto-sends on HIGH risk; the ``always_email`` opt-in forces a send at any
+    level. Safe zones are real shelters fetched live from OpenStreetMap around the
+    selected area's centroid, with flood-zone/route checks derived from the UNet
+    flood mask and elevation sampled from GEE SRTM.
+    """
+    recipient_email = (recipient_email or "").strip()
+    if not recipient_email:
+        return
+
+    risk_level = _risk_level_from_score(risk_score)
+    if risk_level != RiskLevel.HIGH_RISK and not always_email:
+        st.info(
+            f"📭 No alert email sent — current risk for {district} is "
+            f"**{risk_level.value}**. Tick *“Email me regardless of risk level”* "
+            "in the sidebar to receive it anyway."
+        )
+        return
+
+    # Origin proxy: centroid of the area actually under analysis.
+    centroid = geom.centroid
+    origin_lat, origin_lon = float(centroid.y), float(centroid.x)
+
+    with st.spinner("Finding real safe zones near this area (OpenStreetMap)…"):
+        try:
+            raw_shelters = fetch_osm_safe_zones(origin_lat, origin_lon, radius_m=20000)
+        except Exception as e:  # Overpass timeout / network / HTTP error
+            st.error(f"⚠️ Could not query OpenStreetMap for safe zones: {e}")
+            return
+
+    if not raw_shelters:
+        st.warning(
+            "No schools, hospitals, or shelters are mapped in OpenStreetMap near "
+            f"**{district}** — no shelter-specific alert was sent."
+        )
+        return
+
+    elevations = _sample_elevations(
+        [(r["latitude"], r["longitude"]) for r in raw_shelters]
+    )
+    candidates = build_safe_zone_candidates(
+        raw_shelters,
+        origin_lat=origin_lat,
+        origin_lon=origin_lon,
+        mask=pred_mask,
+        bbox=bbox,
+        elevations=elevations,
+    )
+
+    safe_zone = recommend_safe_zone(candidates)
+    if safe_zone is None:
+        # No candidate passed every check; recommend the nearest one that is at
+        # least outside the flood zone rather than sending nothing.
+        outside = [c for c in candidates if not c.in_flood_zone]
+        if not outside:
+            st.error(
+                "Every nearby shelter sits inside the detected flood zone; "
+                "no safe destination to recommend."
+            )
+            return
+        safe_zone = min(
+            outside, key=lambda c: c.distance_km if c.distance_km is not None else 1e9
+        )
+        st.warning(
+            "No shelter passed every safety check; recommending the nearest one "
+            f"outside the flood zone: **{safe_zone.name}**."
+        )
+
+    route = straight_line_route(
+        f"{district} (your area)", origin_lat, origin_lon, safe_zone
+    )
+    flood_state = FloodState(
+        district=district,
+        flood_coverage_percentage=min(float(coverage_pct), 100.0),
+        affected_area_km2=float(affected_area_km2),
+        population_at_risk=int(float(affected_area_km2) * ESTIMATED_POP_DENSITY_PER_KM2),
+        available_shelters=len(evaluate_safe_zones(candidates)),
+    )
+
+    try:
+        with st.spinner(f"Sending flood alert to {recipient_email}…"):
+            send_flood_alert(
+                recipient=recipient_email,
+                risk_level=risk_level,
+                flood_state=flood_state,
+                safe_zone=safe_zone,
+                route=route,
+            )
+        st.success(
+            f"✅ Flood alert emailed to **{recipient_email}** — directing them to "
+            f"**{safe_zone.name}** "
+            f"({safe_zone.latitude:.5f}, {safe_zone.longitude:.5f}), "
+            f"{route.distance_km:g} km, ~{route.estimated_travel_time_min} min."
+        )
+    except EmailConfigError as e:
+        st.error(
+            f"⚠️ Email not configured, alert not sent: {e}"
+        )
+    except Exception as e:  # network/auth/SMTP errors must not crash the dashboard
+        st.error(f"⚠️ Failed to send alert email to {recipient_email}: {e}")
 
 st.set_page_config(page_title="FloodSense-PK Dashboard", layout="wide")
 
@@ -545,6 +712,22 @@ def main():
     start_date = st.sidebar.date_input("Current SAR start date", value=default_start)
     end_date = st.sidebar.date_input("Current SAR end date", value=default_end)
 
+    # Personal flood-alert subscription
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔔 Personal Flood Alert")
+    recipient_email = st.sidebar.text_input(
+        "Your email (optional)",
+        help=(
+            "If this area is in danger, we'll email you the situation, the nearest "
+            "safe zone with exact coordinates, and the estimated travel time."
+        ),
+    )
+    always_email = st.sidebar.checkbox(
+        "Email me regardless of risk level[FOR TESTING ONLY]",
+        value=False,
+        help="Otherwise you are only emailed when the risk is HIGH.",
+    )
+
     # Actions
     with st.sidebar:
         st.markdown("### Run")
@@ -733,6 +916,19 @@ def main():
             }
         ]
         insights = ai.generate_insights(summary_for_ai, river_flows)
+
+    # 4b) Personal flood-alert email (Response & Communication Agent)
+    _maybe_send_flood_alert(
+        recipient_email=recipient_email,
+        always_email=always_email,
+        district=district,
+        risk_score=risk_score,
+        coverage_pct=pct_current,
+        affected_area_km2=unet_result.get("affected_area_km2", 0.0),
+        geom=geom,
+        bbox=bbox,
+        pred_mask=unet_result.get("pred_mask"),
+    )
 
     # 5) Visuals
     sar_gray = render_sar_gray(unet_result["display_arr"])

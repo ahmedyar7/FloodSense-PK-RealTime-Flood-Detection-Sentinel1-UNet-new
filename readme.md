@@ -616,6 +616,13 @@ GDG-Flood-forcast/
 │   ├── ai_alerts.py          # Gemini / Groq + risk scoring
 │   └── data_manager.py       # JSON export utilities
 │
+├── agent/                    # Disaster + Response/Communication agents
+│   ├── disaster_agent.py     # Multi-stream risk assessment
+│   ├── response_agent.py     # Safe-zone eval, routing, alert text
+│   ├── response_schemas.py   # Pydantic models (shelters, routes, flood state)
+│   ├── email_notifier.py     # Personal flood-alert email (SMTP)
+│   └── mock_osm.py           # Mock OSM shelters + road graph
+│
 ├── utils/
 │   ├── ndwi.py               # Landsat-5 2010 MNDWI pipeline
 │   ├── districts.py          # District boundaries + zonal stats
@@ -750,8 +757,36 @@ Create a standard `.env` file in the root directory to store variables for repor
 PROJECT_ID="your-google-cloud-project-id"
 GEMINI_API_KEY="your-gemini-key"
 GROQ_API_KEY="your-groq-key"
+EMAIL_SENDER="YOUR_EMAIL_SENDER"
+EMAIL_APP_PASSWORD="your 16 char app password"
+SMTP_HOST="smtp.gmail.com"
+SMTP_PORT="587"
 
 ```
+
+> The `GEMINI_API_KEY` / `GROQ_API_KEY` power the LLM report generation. The four `EMAIL_*` variables power the **Personal Flood Alert** emails (see the next section). All of them are optional — the app runs without them; only the corresponding feature is disabled when a key is absent.
+
+#### B-1. Personal Flood Alert Email (Gmail SMTP)
+
+The **Response & Communication Agent** can email a personalised evacuation alert to a citizen when their selected area is in danger. Delivery uses plain SMTP, so any provider works, but the simplest zero-cost option is a **Gmail App Password**:
+
+| Variable | What it is | Example |
+| --- | --- | --- |
+| `EMAIL_SENDER` | The Gmail address the alert is sent **from** | `floodsense.alerts@gmail.com` |
+| `EMAIL_APP_PASSWORD` | A 16-character Google App Password (**not** your normal login password) | `abcd efgh ijkl mnop` |
+| `SMTP_HOST` | SMTP server host (defaults to Gmail) | `smtp.gmail.com` |
+| `SMTP_PORT` | SMTP STARTTLS port | `587` |
+
+**Generate a Gmail App Password (≈2 minutes):**
+
+1. Use a Google account and enable **2-Step Verification** at <https://myaccount.google.com/security>.
+2. Open <https://myaccount.google.com/apppasswords>.
+3. Create a password for the app **"Mail"** — Google shows a 16-character code.
+4. Paste that code into `EMAIL_APP_PASSWORD` (spaces are fine) and set `EMAIL_SENDER` to that Gmail address.
+
+> **Non-Gmail providers:** set `SMTP_HOST` / `SMTP_PORT` to your provider's STARTTLS endpoint and use the corresponding SMTP username (`EMAIL_SENDER`) and password (`EMAIL_APP_PASSWORD`). No code changes are needed.
+
+Once configured, the agent sends each alert with the **current situation** of the affected area (risk level, flood coverage, affected area, estimated population at risk, available shelters), the **recommended safe zone with its exact coordinates** and a Google Maps directions link, and the **distance and estimated travel time** to reach it.
 
 #### C. Safety Guardrails
 
@@ -791,8 +826,11 @@ streamlit run streamlit_app.py
 
 1. Select **District / Province / National** scale (sidebar).
 2. Pick date range for current SAR composite.
-3. Click **Run analysis**.
-4. Explore tabs: Overview → Detection → River Flows → AI Intelligence.
+3. *(Optional)* Under **🔔 Personal Flood Alert**, enter **Your email** to be notified if the area is in danger. By default the alert is emailed only when the risk is **HIGH**; tick **"Email me regardless of risk level"** to receive it at any risk level (useful for testing). Requires the `EMAIL_*` keys from the [setup section](#b-1-personal-flood-alert-email-gmail-smtp).
+4. Click **Run analysis**.
+5. Explore tabs: Overview → Detection → River Flows → AI Intelligence.
+
+If you subscribed an email, a confirmation banner appears after the run showing the recommended safe zone, its coordinates, distance, and estimated travel time — and the alert lands in the recipient's inbox.
 
 Or use the hosted version: **[floodsense-pk.streamlit.app](https://floodsense-pk.streamlit.app/)**
 
