@@ -31,6 +31,16 @@ from .email_notifier import (
     send_flood_alert,
     maps_link,
 )
+from .osm_safe_zones import (
+    OVERPASS_URL,
+    DEFAULT_ELEVATION_M,
+    haversine_km,
+    point_in_flood,
+    line_crosses_flood,
+    fetch_osm_safe_zones,
+    build_safe_zone_candidates,
+    straight_line_route,
+)
 
 __all__ = [
     "SatelliteIntelligence",
@@ -60,4 +70,13 @@ __all__ = [
     "build_alert_email",
     "send_flood_alert",
     "maps_link",
+    # Real OSM safe-zone discovery (Overpass)
+    "OVERPASS_URL",
+    "DEFAULT_ELEVATION_M",
+    "haversine_km",
+    "point_in_flood",
+    "line_crosses_flood",
+    "fetch_osm_safe_zones",
+    "build_safe_zone_candidates",
+    "straight_line_route",
 ]

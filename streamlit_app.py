@@ -67,11 +67,12 @@ from agent import (
     FloodState,
     evaluate_safe_zones,
     recommend_safe_zone,
-    plan_route,
     send_flood_alert,
     EmailConfigError,
+    fetch_osm_safe_zones,
+    build_safe_zone_candidates,
+    straight_line_route,
 )
-from agent.mock_osm import MOCK_SAFE_ZONE_CANDIDATES, MOCK_ROAD_GRAPH
 
 SHAPEFILE = "pakistan_districts.json"
 
@@ -89,13 +90,52 @@ def _risk_level_from_score(score: float) -> RiskLevel:
     return RiskLevel.LOW_RISK
 
 
+def _sample_elevations(points):
+    """Return SRTM ground elevation (m) for each ``(lat, lon)`` point.
+
+    Uses one Earth Engine ``reduceRegions`` call over USGS SRTM. Returns a list
+    parallel to ``points``; an entry is ``None`` when the sample is unavailable
+    (the caller then falls back to a safe default elevation).
+    """
+    if not points:
+        return []
+    try:
+        feats = [
+            ee.Feature(ee.Geometry.Point([lon, lat]), {"idx": i})
+            for i, (lat, lon) in enumerate(points)
+        ]
+        fc = ee.FeatureCollection(feats)
+        srtm = ee.Image("USGS/SRTMGL1_003")
+        sampled = srtm.reduceRegions(
+            collection=fc, reducer=ee.Reducer.first(), scale=30
+        ).getInfo()
+        elev_by_idx = {}
+        for f in sampled.get("features", []):
+            props = f.get("properties", {})
+            elev_by_idx[props.get("idx")] = props.get("first")
+        return [elev_by_idx.get(i) for i in range(len(points))]
+    except Exception as e:  # elevation is best-effort; never block the alert
+        print(f"Elevation sampling failed: {e}")
+        return [None] * len(points)
+
+
 def _maybe_send_flood_alert(
-    recipient_email, always_email, district, risk_score, coverage_pct, affected_area_km2
+    recipient_email,
+    always_email,
+    district,
+    risk_score,
+    coverage_pct,
+    affected_area_km2,
+    geom,
+    bbox,
+    pred_mask,
 ):
     """Email a personalised evacuation alert when the area is in danger.
 
     Auto-sends on HIGH risk; the ``always_email`` opt-in forces a send at any
-    level. Safe-zone and routing data come from the mock OSM module (PR 3).
+    level. Safe zones are real shelters fetched live from OpenStreetMap around the
+    selected area's centroid, with flood-zone/route checks derived from the UNet
+    flood mask and elevation sampled from GEE SRTM.
     """
     recipient_email = (recipient_email or "").strip()
     if not recipient_email:
@@ -110,18 +150,64 @@ def _maybe_send_flood_alert(
         )
         return
 
-    safe_zone = recommend_safe_zone(MOCK_SAFE_ZONE_CANDIDATES)
-    if safe_zone is None:
-        st.error("No safe zone currently available to recommend; alert not sent.")
+    # Origin proxy: centroid of the area actually under analysis.
+    centroid = geom.centroid
+    origin_lat, origin_lon = float(centroid.y), float(centroid.x)
+
+    with st.spinner("Finding real safe zones near this area (OpenStreetMap)…"):
+        try:
+            raw_shelters = fetch_osm_safe_zones(origin_lat, origin_lon, radius_m=20000)
+        except Exception as e:  # Overpass timeout / network / HTTP error
+            st.error(f"⚠️ Could not query OpenStreetMap for safe zones: {e}")
+            return
+
+    if not raw_shelters:
+        st.warning(
+            "No schools, hospitals, or shelters are mapped in OpenStreetMap near "
+            f"**{district}** — no shelter-specific alert was sent."
+        )
         return
 
-    route = plan_route(MOCK_ROAD_GRAPH, origin="Origin", destination="Hospital")
+    elevations = _sample_elevations(
+        [(r["latitude"], r["longitude"]) for r in raw_shelters]
+    )
+    candidates = build_safe_zone_candidates(
+        raw_shelters,
+        origin_lat=origin_lat,
+        origin_lon=origin_lon,
+        mask=pred_mask,
+        bbox=bbox,
+        elevations=elevations,
+    )
+
+    safe_zone = recommend_safe_zone(candidates)
+    if safe_zone is None:
+        # No candidate passed every check; recommend the nearest one that is at
+        # least outside the flood zone rather than sending nothing.
+        outside = [c for c in candidates if not c.in_flood_zone]
+        if not outside:
+            st.error(
+                "Every nearby shelter sits inside the detected flood zone; "
+                "no safe destination to recommend."
+            )
+            return
+        safe_zone = min(
+            outside, key=lambda c: c.distance_km if c.distance_km is not None else 1e9
+        )
+        st.warning(
+            "No shelter passed every safety check; recommending the nearest one "
+            f"outside the flood zone: **{safe_zone.name}**."
+        )
+
+    route = straight_line_route(
+        f"{district} (your area)", origin_lat, origin_lon, safe_zone
+    )
     flood_state = FloodState(
         district=district,
         flood_coverage_percentage=min(float(coverage_pct), 100.0),
         affected_area_km2=float(affected_area_km2),
         population_at_risk=int(float(affected_area_km2) * ESTIMATED_POP_DENSITY_PER_KM2),
-        available_shelters=len(evaluate_safe_zones(MOCK_SAFE_ZONE_CANDIDATES)),
+        available_shelters=len(evaluate_safe_zones(candidates)),
     )
 
     try:
@@ -839,6 +925,9 @@ def main():
         risk_score=risk_score,
         coverage_pct=pct_current,
         affected_area_km2=unet_result.get("affected_area_km2", 0.0),
+        geom=geom,
+        bbox=bbox,
+        pred_mask=unet_result.get("pred_mask"),
     )
 
     # 5) Visuals
