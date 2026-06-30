@@ -647,6 +647,38 @@ The projection is physically grounded and reproducible:
 
 In the **Disaster Workflow** tab this renders as a projection curve, a per-horizon table, a downstream-risk table, and the generated citizen/authority alerts — grounded with the RAG sources used for the assessment.
 
+### Live walkthrough (Disaster Workflow tab)
+
+A single click chains all four agents end-to-end:
+
+<p align="center">
+  <img src="public/disaster-workflow/end-2-end-disaster-workflow.png" alt="End-to-end disaster intelligence workflow header" width="920" />
+</p>
+
+<p align="center"><em>One orchestrated run: Satellite + River + Historical + RAG → Disaster Intelligence → Simulation → Response &amp; Communication.</em></p>
+
+**Stage 1 · Disaster Intelligence Agent** — classifies risk and explains it, grounded in retrieved knowledge.
+
+<p align="center">
+  <img src="public/disaster-workflow/disaster-intelligence-agent.png" alt="Disaster Intelligence Agent risk classification" width="920" />
+</p>
+
+**Stage 2 · Simulation Agent** — projects the flood's progression and downstream propagation.
+
+<p align="center">
+  <img src="public/disaster-workflow/simulation_agent_1.png" alt="Simulation Agent projection metrics and coverage curve" width="920" />
+</p>
+
+<p align="center">
+  <img src="public/disaster-workflow/simulation_agent_2.png" alt="Simulation Agent per-horizon table and progression summary" width="920" />
+</p>
+
+**Stage 3 · Response & Communication Agent** — drafts citizen and authority alerts for the projected peak.
+
+<p align="center">
+  <img src="public/disaster-workflow/response_n_communication_agent.png" alt="Response and Communication Agent citizen and authority alerts" width="920" />
+</p>
+
 ---
 
 ## RAG Knowledge System
@@ -682,6 +714,14 @@ flowchart TB
 The seed corpus is `rag/data/Structured-Knowledge-Instruction-Pipeline.pdf` — the platform's structured design + domain-knowledge spec (institutional framework, discharge capacities and travel-time tables, district histories such as Charsadda and Trimmu Headworks). The legacy mock corpus (`rag/mock_documents.py`) remains as a fallback so the pipeline runs even without the PDF.
 
 > The RAG chatbot lives in the **AI Intelligence** tab; the Disaster Intelligence Agent pulls a small slice of retrieved context per district when running the Disaster Workflow. Both degrade gracefully — if Qdrant or embeddings are unavailable, the rest of the dashboard is unaffected.
+
+### Disaster Knowledge Assistant (chatbot)
+
+<p align="center">
+  <img src="public/ai_intelligence/disaster-knowledge-assistant.png" alt="RAG-powered Disaster Knowledge Assistant chatbot in the AI Intelligence tab" width="920" />
+</p>
+
+<p align="center"><em>Ask about Pakistan flood history, NDMA protocols, FFD river data, and disaster response — answers grounded in the RAG knowledge base.</em></p>
 
 ---
 
@@ -890,6 +930,26 @@ The **Response & Communication Agent** can email a personalised evacuation alert
 > **Non-Gmail providers:** set `SMTP_HOST` / `SMTP_PORT` to your provider's STARTTLS endpoint and use the corresponding SMTP username (`EMAIL_SENDER`) and password (`EMAIL_APP_PASSWORD`). No code changes are needed.
 
 Once configured, the agent sends each alert with the **current situation** of the affected area (risk level, flood coverage, affected area, estimated population at risk, available shelters), the **recommended safe zone with its exact coordinates** and a Google Maps directions link, and the **distance and estimated travel time** to reach it.
+
+**Demonstration — from subscription to inbox:**
+
+<p align="center">
+  <img src="public/ai_intelligence/personal_flood_alert.png" alt="Personal Flood Alert subscription form in the sidebar" width="300" />
+</p>
+
+<p align="center"><em>1 · Subscribe an email under <strong>🔔 Personal Flood Alert</strong> in the sidebar, then run the analysis.</em></p>
+
+<p align="center">
+  <img src="public/ai_intelligence/email-alert.png" alt="In-app confirmation banner after the run" width="900" />
+</p>
+
+<p align="center"><em>2 · An in-app banner confirms the recommended safe zone, distance, and travel time.</em></p>
+
+<p align="center">
+  <img src="public/ai_intelligence/email_response.png" alt="Personalised flood evacuation alert delivered to the citizen's inbox" width="760" />
+</p>
+
+<p align="center"><em>3 · The personalised evacuation alert lands in the citizen's inbox, with safe-zone coordinates and a Google Maps directions link.</em></p>
 
 #### C. Safety Guardrails
 
