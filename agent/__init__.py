@@ -9,6 +9,18 @@ from .schemas import (
     RiverStatus,
 )
 from .disaster_agent import assess_risk, classify_risk
+from .simulation_schemas import (
+    FloodProjection,
+    DownstreamRisk,
+    FloodProgression,
+)
+from .simulation_agent import (
+    simulate_progression,
+    simulate_from_assessment,
+    spilled_area_change_km2,
+    downstream_districts,
+    DEFAULT_HORIZONS_HOURS,
+)
 from .response_schemas import (
     LocationType,
     SafeZoneCandidate,
@@ -41,6 +53,7 @@ from .osm_safe_zones import (
     build_safe_zone_candidates,
     straight_line_route,
 )
+from .pipeline import PipelineResult, run_pipeline
 
 __all__ = [
     "SatelliteIntelligence",
@@ -79,4 +92,16 @@ __all__ = [
     "fetch_osm_safe_zones",
     "build_safe_zone_candidates",
     "straight_line_route",
+    # Simulation Agent (flood progression)
+    "FloodProjection",
+    "DownstreamRisk",
+    "FloodProgression",
+    "simulate_progression",
+    "simulate_from_assessment",
+    "spilled_area_change_km2",
+    "downstream_districts",
+    "DEFAULT_HORIZONS_HOURS",
+    # End-to-end orchestrator
+    "PipelineResult",
+    "run_pipeline",
 ]

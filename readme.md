@@ -67,6 +67,8 @@ flowchart TB
 - [Hydraulic Command Center](#hydraulic-command-center)
 - [Strategic AI Insights](#strategic-ai-insights)
 - [Risk Scoring](#risk-scoring)
+- [Agentic Disaster Workflow](#agentic-disaster-workflow)
+- [RAG Knowledge System](#rag-knowledge-system)
 - [Project Structure](#project-structure)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -101,6 +103,8 @@ FloodSense-PK ships as **two frontends** that share the same flood intelligence 
 - **2010 vs Current comparison**: Side-by-side historical and live flood % with **Delta Severity**.
 - **Native river map** (web): Pydeck topology linking Tarbela to Sukkur to Kotri and tributary networks.
 - **AI tactical reports** (web): Gemini (primary) or Groq (fallback) generate structured operational briefings.
+- **Agentic disaster workflow** (web): a four-agent chain — Disaster Intelligence → Simulation → Response & Communication, orchestrated end-to-end — turns raw evidence into a risk class, a time-stepped flood projection, downstream-district warnings, and citizen/authority alerts.
+- **RAG knowledge grounding**: a Qdrant-backed retrieval layer ingests the platform's structured-knowledge PDF and feeds domain context (barrage capacities, district history, escalation rules) into both the chatbot and the agent assessment.
 
 ### Model benchmark (Sen1Floods11)
 
@@ -225,16 +229,17 @@ flowchart LR
 
 ## Executive Dashboard (Web App)
 
-The **Streamlit web dashboard** runs locally at `http://localhost:8501` or on **[Streamlit Cloud](https://floodsense-pk.streamlit.app/)** with four analytical tabs after **Run analysis**.
+The **Streamlit web dashboard** runs locally at `http://localhost:8501` or on **[Streamlit Cloud](https://floodsense-pk.streamlit.app/)** with five analytical tabs after **Run analysis**.
 
-| Tab                 | Purpose                                                  |
-| ------------------- | -------------------------------------------------------- |
-| **Overview**        | 2010 vs Current side-by-side, Delta Severity, risk score |
-| **Detection**       | SAR + probability heatmap + unified mask, km² affected   |
-| **River Flows**     | FFD status map, bar charts, inflow/outflow scatter       |
-| **AI Intelligence** | Structured Gemini tactical report (web only)             |
+| Tab                   | Purpose                                                              |
+| --------------------- | -------------------------------------------------------------------- |
+| **Overview**          | 2010 vs Current side-by-side, Delta Severity, risk score             |
+| **Detection**         | SAR + probability heatmap + unified mask, km² affected               |
+| **River Flows**       | FFD status map, bar charts, inflow/outflow scatter                   |
+| **AI Intelligence**   | Structured Gemini tactical report + RAG knowledge chatbot (web only) |
+| **Disaster Workflow** | End-to-end four-agent run: risk → projection → response (web only)   |
 
-> **Web vs Mobile:** The Streamlit web app has 4 tabs including River Flows and AI Intelligence. The Flet mobile app has 3 tabs (Home, Analysis, Profile) with login and district-based alerts.
+> **Web vs Mobile:** The Streamlit web app has 5 tabs including River Flows, AI Intelligence, and the agentic Disaster Workflow. The Flet mobile app has 3 tabs (Home, Analysis, Profile) with login and district-based alerts.
 
 ### Overview: 2010 vs Current comparison
 
@@ -600,6 +605,86 @@ Simple pixel risk from U-Net alone: `min(10, max(1, round(flood_pct / 10)))`.
 
 ---
 
+## Agentic Disaster Workflow
+
+Beyond the dashboards, FloodSense-PK ships a **four-agent decision pipeline** (`agent/`) that turns the raw evidence streams into an actionable response. Every stage is **deterministic and rule-based** — an optional `llm_fn` only enriches the natural-language narratives — so the workflow is fully testable without any API keys. The **Disaster Workflow** tab runs the whole chain live, and `agent.run_pipeline()` exposes it programmatically.
+
+```mermaid
+flowchart LR
+    SAT[Satellite Sentinel-1 + U-Net]
+    RIV[River FFD discharge]
+    HIS[Historical 2010 baseline]
+    RAG[RAG knowledge Qdrant]
+
+    A1[Disaster Intelligence Agent classify risk]
+    A2[Simulation Agent flood progression]
+    A3[Response and Communication Agent safe zones + alerts]
+
+    OUT[Risk class · projection · downstream warnings · citizen/authority alerts]
+
+    SAT --> A1
+    RIV --> A1
+    HIS --> A1
+    RAG --> A1
+    A1 --> A2 --> A3 --> OUT
+```
+
+| Stage                                  | Module                      | What it produces                                                                                                                                                                                                                                             |
+| -------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **1 · Disaster Intelligence Agent**    | `agent/disaster_agent.py`   | Classifies overall risk (LOW / MODERATE / HIGH) by fusing satellite extent, river status, the 2010 delta, and retrieved RAG context; emits an explanation and a recommended action.                                                                          |
+| **2 · Simulation Agent**               | `agent/simulation_agent.py` | Projects how the flood **progresses over time** using a transparent volume-balance model: per-horizon coverage (6/12/24/48 h), projected affected area and population, peak timing, and the **downstream districts** the flood wave will threaten with ETAs. |
+| **3 · Response & Communication Agent** | `agent/response_agent.py`   | Evaluates safe-zone candidates, plans an evacuation route, and drafts citizen + authority alerts for the **projected peak** situation.                                                                                                                       |
+| **Orchestrator**                       | `agent/pipeline.py`         | `run_pipeline()` wires all stages into one call and returns a consolidated `PipelineResult`.                                                                                                                                                                 |
+
+### Simulation Agent: volume-balance model
+
+The projection is physically grounded and reproducible:
+
+- Net river flux (`inflow − outflow`) that spills overbank (`SPILL_FRACTION = 0.15`) accumulates as floodwater volume over each horizon.
+- That volume spreads across the district floodplain at an assumed average inundation depth (`1.5 m`), growing — or, when outflow dominates, shrinking — the flooded area.
+- River **trend** and **status** scale the spill magnitude (a rising / EXTREME river drives proportionally more water overbank than a falling / NORMAL one).
+- Downstream propagation is walked along the encoded Kabul/Indus river chain (e.g. _Charsadda → Nowshera → Attock_; _Sukkur → Larkana_) and only flagged when the situation is actually worsening.
+
+In the **Disaster Workflow** tab this renders as a projection curve, a per-horizon table, a downstream-risk table, and the generated citizen/authority alerts — grounded with the RAG sources used for the assessment.
+
+---
+
+## RAG Knowledge System
+
+The `rag/` package is a **production retrieval-augmented-generation layer** that grounds the AI chatbot and the Disaster Intelligence Agent in the platform's own domain knowledge instead of generic model priors.
+
+```mermaid
+flowchart TB
+    PDF[Structured-Knowledge-Instruction-Pipeline.pdf]
+    LOAD[pdf_loader.py page-tracking section split]
+    CHUNK[chunking.py RecursiveCharacterTextSplitter]
+    EMB[embeddings.py all-MiniLM-L6-v2 384-d]
+    QD[(Qdrant vector collection)]
+    RET[retriever.py top-k + context]
+    USE[AI chatbot and Disaster Intelligence Agent]
+
+    PDF --> LOAD --> CHUNK --> EMB --> QD
+    QD --> RET --> USE
+```
+
+### Ingestion pipeline (`rag/ingest.py`)
+
+| Step         | Module          | Detail                                                                                                                                                                                                                                                  |
+| ------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Load**     | `pdf_loader.py` | Parses the architecture PDF with **pypdf**, splits it into hierarchical numbered sections, and records the **page number** each section starts on for clean source attribution.                                                                         |
+| **Chunk**    | `chunking.py`   | A dependency-free, hierarchical `RecursiveCharacterTextSplitter` (≈500-token chunks, 100-token overlap) that breaks on the largest natural boundary that fits — paragraph → line → sentence → word — so tables, JSON schemas, and sections stay intact. |
+| **Embed**    | `embeddings.py` | Encodes each chunk with **sentence-transformers** (`all-MiniLM-L6-v2`, 384-dim).                                                                                                                                                                        |
+| **Store**    | `ingest.py`     | Upserts vectors into a **Qdrant** collection with metadata: `source`, `title`, `section`, `page_number`, `chunk_index`, `text`.                                                                                                                         |
+| **Retrieve** | `retriever.py`  | `retrieve()` returns top-k payloads; `build_context()` formats them; `rag_query()` runs the full retrieve-then-generate loop.                                                                                                                           |
+
+### Knowledge document
+
+The seed corpus is `rag/data/Structured-Knowledge-Instruction-Pipeline.pdf` — the platform's structured design + domain-knowledge spec (institutional framework, discharge capacities and travel-time tables, district histories such as Charsadda and Trimmu Headworks). The legacy mock corpus (`rag/mock_documents.py`) remains as a fallback so the pipeline runs even without the PDF.
+
+> The RAG chatbot lives in the **AI Intelligence** tab; the Disaster Intelligence Agent pulls a small slice of retrieved context per district when running the Disaster Workflow. Both degrade gracefully — if Qdrant or embeddings are unavailable, the rest of the dashboard is unaffected.
+
+---
+
 ## Project Structure
 
 ```
@@ -616,12 +701,30 @@ GDG-Flood-forcast/
 │   ├── ai_alerts.py          # Gemini / Groq + risk scoring
 │   └── data_manager.py       # JSON export utilities
 │
-├── agent/                    # Disaster + Response/Communication agents
-│   ├── disaster_agent.py     # Multi-stream risk assessment
-│   ├── response_agent.py     # Safe-zone eval, routing, alert text
+├── agent/                    # Four-agent disaster-intelligence pipeline
+│   ├── schemas.py            # Input/output Pydantic models (satellite, hydraulic, RAG, risk)
+│   ├── disaster_agent.py     # Stage 1: multi-stream risk assessment
+│   ├── simulation_agent.py   # Stage 2: flood-progression projection (volume balance)
+│   ├── simulation_schemas.py # Projection / downstream-risk models
+│   ├── response_agent.py     # Stage 3: safe-zone eval, routing, alert text
 │   ├── response_schemas.py   # Pydantic models (shelters, routes, flood state)
+│   ├── pipeline.py           # run_pipeline(): end-to-end orchestrator
 │   ├── email_notifier.py     # Personal flood-alert email (SMTP)
-│   └── mock_osm.py           # Mock OSM shelters + road graph
+│   ├── osm_safe_zones.py     # Live OpenStreetMap safe-zone discovery (Overpass)
+│   ├── mock_osm.py           # Mock OSM shelters + road graph
+│   └── mock_intelligence.py  # Sample intelligence streams for tests/demos
+│
+├── rag/                      # Retrieval-augmented knowledge system
+│   ├── pdf_loader.py         # Page-tracking, section-aware PDF parser (pypdf)
+│   ├── chunking.py           # RecursiveCharacterTextSplitter (structural)
+│   ├── ingest.py             # Chunk → embed → upsert into Qdrant
+│   ├── embeddings.py         # sentence-transformers (all-MiniLM-L6-v2, 384-d)
+│   ├── retriever.py          # top-k retrieval + context building + rag_query
+│   ├── mock_documents.py     # Fallback mock corpus
+│   └── data/
+│       └── Structured-Knowledge-Instruction-Pipeline.pdf
+│
+├── tests/                    # Pytest suite (agents, pipeline, RAG ingestion)
 │
 ├── utils/
 │   ├── ndwi.py               # Landsat-5 2010 MNDWI pipeline
@@ -770,12 +873,12 @@ SMTP_PORT="587"
 
 The **Response & Communication Agent** can email a personalised evacuation alert to a citizen when their selected area is in danger. Delivery uses plain SMTP, so any provider works, but the simplest zero-cost option is a **Gmail App Password**:
 
-| Variable | What it is | Example |
-| --- | --- | --- |
-| `EMAIL_SENDER` | The Gmail address the alert is sent **from** | `floodsense.alerts@gmail.com` |
-| `EMAIL_APP_PASSWORD` | A 16-character Google App Password (**not** your normal login password) | `abcd efgh ijkl mnop` |
-| `SMTP_HOST` | SMTP server host (defaults to Gmail) | `smtp.gmail.com` |
-| `SMTP_PORT` | SMTP STARTTLS port | `587` |
+| Variable             | What it is                                                              | Example                       |
+| -------------------- | ----------------------------------------------------------------------- | ----------------------------- |
+| `EMAIL_SENDER`       | The Gmail address the alert is sent **from**                            | `floodsense.alerts@gmail.com` |
+| `EMAIL_APP_PASSWORD` | A 16-character Google App Password (**not** your normal login password) | `abcd efgh ijkl mnop`         |
+| `SMTP_HOST`          | SMTP server host (defaults to Gmail)                                    | `smtp.gmail.com`              |
+| `SMTP_PORT`          | SMTP STARTTLS port                                                      | `587`                         |
 
 **Generate a Gmail App Password (≈2 minutes):**
 
@@ -826,9 +929,9 @@ streamlit run streamlit_app.py
 
 1. Select **District / Province / National** scale (sidebar).
 2. Pick date range for current SAR composite.
-3. *(Optional)* Under **🔔 Personal Flood Alert**, enter **Your email** to be notified if the area is in danger. By default the alert is emailed only when the risk is **HIGH**; tick **"Email me regardless of risk level"** to receive it at any risk level (useful for testing). Requires the `EMAIL_*` keys from the [setup section](#b-1-personal-flood-alert-email-gmail-smtp).
+3. _(Optional)_ Under **🔔 Personal Flood Alert**, enter **Your email** to be notified if the area is in danger. By default the alert is emailed only when the risk is **HIGH**; tick **"Email me regardless of risk level"** to receive it at any risk level (useful for testing). Requires the `EMAIL_*` keys from the [setup section](#b-1-personal-flood-alert-email-gmail-smtp).
 4. Click **Run analysis**.
-5. Explore tabs: Overview → Detection → River Flows → AI Intelligence.
+5. Explore tabs: Overview → Detection → River Flows → AI Intelligence → Disaster Workflow.
 
 If you subscribed an email, a confirmation banner appears after the run showing the recommended safe zone, its coordinates, distance, and estimated travel time — and the alert lands in the recipient's inbox.
 
@@ -861,6 +964,29 @@ model = load_flood_model()
 result = predict_flood(model, sar_geotiff_bytes, "Charsadda", bbox)
 
 print(result["water_coverage_pct"], result["affected_area_km2"], result["risk_score"])
+```
+
+### Agentic workflow (programmatic)
+
+```python
+from agent import (
+    run_pipeline,
+    SatelliteIntelligence, HydraulicIntelligence, HistoricalIntelligence,
+    RiverTrend, RiverStatus,
+)
+
+result = run_pipeline(
+    SatelliteIntelligence(district="Charsadda", flood_extent_percentage=22.0, affected_area_km2=180.0),
+    HydraulicIntelligence(station="Nowshera", river_discharge_cusecs=210000,
+                          inflow_cusecs=210000, outflow_cusecs=180000,
+                          trend=RiverTrend.RISING, status=RiverStatus.HIGH),
+    HistoricalIntelligence(benchmark_year=2010, benchmark_flood_percentage=35.0),
+    population_at_risk=120_000,
+)
+
+print(result.assessment.risk_level)               # HIGH RISK
+print(result.progression.peak_coverage_percentage) # projected peak
+print(result.citizen_alert)                         # public-facing alert
 ```
 
 ---
@@ -944,6 +1070,15 @@ All libraries and services used across the web dashboard, CLI pipeline, and mobi
 | :------------------------------------------------------------------------------------------------------------------------------------: | -------------------------------- | ---------------------------------- |
 | <img src="https://img.shields.io/badge/-Gemini-8E75B2?style=flat-square&logo=google-gemini&logoColor=white" height="18" alt="gemini"/> | **google-generativeai · Gemini** | Primary tactical report generation |
 |      <img src="https://img.shields.io/badge/-Groq-F55036?style=flat-square&logo=fastapi&logoColor=white" height="18" alt="groq"/>      | **groq**                         | Fast LLM inference fallback        |
+
+### RAG & Vector Search
+
+|     | Library / Service         | Purpose                                                  |
+| :-: | ------------------------- | -------------------------------------------------------- |
+|     | **qdrant-client**         | Vector database for knowledge-base storage and retrieval |
+|     | **sentence-transformers** | Text embeddings (`all-MiniLM-L6-v2`, 384-dim)            |
+|     | **pypdf**                 | Structure-aware PDF parsing for the knowledge document   |
+|     | **pydantic**              | Typed schemas for the four-agent disaster pipeline       |
 
 ### Satellites & Data Sources
 
