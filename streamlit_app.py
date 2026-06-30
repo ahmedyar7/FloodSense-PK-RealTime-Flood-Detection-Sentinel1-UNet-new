@@ -72,6 +72,14 @@ from agent import (
     fetch_osm_safe_zones,
     build_safe_zone_candidates,
     straight_line_route,
+    # Full disaster-intelligence workflow orchestrator + input schemas
+    run_pipeline,
+    SatelliteIntelligence,
+    HydraulicIntelligence,
+    HistoricalIntelligence,
+    RAGContext,
+    RiverTrend,
+    RiverStatus,
 )
 
 SHAPEFILE = "pakistan_districts.json"
@@ -88,6 +96,240 @@ def _risk_level_from_score(score: float) -> RiskLevel:
     if score >= 4:
         return RiskLevel.MODERATE_RISK
     return RiskLevel.LOW_RISK
+
+
+def _map_river_status(status: str) -> RiverStatus:
+    """Map an FFC status string onto the agent's RiverStatus enum."""
+    s = (status or "").upper()
+    if "EXTREME" in s:
+        return RiverStatus.EXTREME
+    if "HIGH" in s:
+        return RiverStatus.HIGH
+    return RiverStatus.NORMAL
+
+
+def _map_river_trend(trend: str) -> RiverTrend:
+    """Map an FFC inflow-trend string onto the agent's RiverTrend enum."""
+    t = (trend or "").lower()
+    if "ris" in t:
+        return RiverTrend.RISING
+    if "fall" in t:
+        return RiverTrend.FALLING
+    return RiverTrend.STABLE
+
+
+def _district_area_km2(geom) -> float | None:
+    """Equal-area district size (km²) for the simulation's coverage maths.
+
+    Used only as a fallback when current coverage is ~0% and the area cannot be
+    derived from the flooded extent. Returns ``None`` if it cannot be computed.
+    """
+    try:
+        # EPSG:6933 (World Cylindrical Equal Area) gives areas in m².
+        area_m2 = gpd.GeoSeries([geom], crs="EPSG:4326").to_crs("EPSG:6933").area.iloc[0]
+        return float(area_m2) / 1_000_000 if area_m2 > 0 else None
+    except Exception:
+        return None
+
+
+def _build_rag_context(district: str) -> RAGContext:
+    """Retrieve a little knowledge-base context for the district (best-effort)."""
+    try:
+        from rag import retrieve, build_context
+
+        client, embedder = init_rag_system()
+        docs = retrieve(f"flood risk and history for {district}", client, embedder, top_k=3)
+        if not docs:
+            return RAGContext()
+        sources = sorted({d.get("source", "") for d in docs if d.get("source")})
+        return RAGContext(context=build_context(docs), sources=sources)
+    except Exception as e:  # RAG is optional context; never block the workflow
+        print(f"RAG context unavailable for workflow: {e}")
+        return RAGContext()
+
+
+def render_disaster_workflow(
+    district: str,
+    geom,
+    pct_current: float,
+    pct_2010: float,
+    affected_area_km2: float,
+    matched_station: dict | None,
+):
+    """Run and visualise the end-to-end FloodSense-PK orchestration.
+
+    Satellite + River + Historical + RAG
+      → Disaster Intelligence Agent → Simulation Agent → Response & Communication.
+    """
+    st.subheader("End-to-End Disaster Intelligence Workflow")
+    st.caption(
+        "A single orchestrated run chaining all four platform agents — exactly the "
+        "flow described in final-workflow.md."
+    )
+    st.markdown(
+        "`Satellite + River + Historical + RAG` → **Disaster Intelligence Agent** "
+        "→ **Simulation Agent** → **Response & Communication Agent**"
+    )
+
+    # ── Assemble the four input streams from the dashboard's live data ──
+    satellite = SatelliteIntelligence(
+        district=district,
+        flood_extent_percentage=min(float(pct_current), 100.0),
+        affected_area_km2=float(affected_area_km2),
+    )
+
+    if matched_station:
+        hydraulic = HydraulicIntelligence(
+            station=matched_station.get("station", district),
+            river_discharge_cusecs=float(matched_station.get("inflow", 0) or 0),
+            inflow_cusecs=float(matched_station.get("inflow", 0) or 0),
+            outflow_cusecs=float(matched_station.get("outflow", 0) or 0),
+            trend=_map_river_trend(matched_station.get("inflow_trend")),
+            status=_map_river_status(matched_station.get("status")),
+        )
+    else:
+        st.info(
+            "No hydraulic station matched this area — simulating with a neutral "
+            "river (no net flux). Connect a station for a dynamic projection."
+        )
+        hydraulic = HydraulicIntelligence(
+            station=f"{district} (no gauge)",
+            river_discharge_cusecs=0.0,
+            inflow_cusecs=0.0,
+            outflow_cusecs=0.0,
+            trend=RiverTrend.STABLE,
+            status=RiverStatus.NORMAL,
+        )
+
+    historical = HistoricalIntelligence(
+        benchmark_year=2010,
+        benchmark_flood_percentage=min(float(pct_2010), 100.0),
+    )
+
+    with st.spinner("Retrieving RAG knowledge context…"):
+        rag_context = _build_rag_context(district)
+
+    population_at_risk = int(float(affected_area_km2) * ESTIMATED_POP_DENSITY_PER_KM2)
+    # Only needed when current coverage is ~0% (area can't be derived from extent).
+    district_area = None if float(pct_current) > 0.01 else _district_area_km2(geom)
+
+    with st.spinner("Running the four-agent workflow…"):
+        result = run_pipeline(
+            satellite,
+            hydraulic,
+            historical,
+            rag_context,
+            population_at_risk=population_at_risk,
+            district_area_km2=district_area,
+        )
+
+    assessment = result.assessment
+    progression = result.progression
+
+    # ── Stage 1: Disaster Intelligence Agent ──
+    st.markdown("### 1 · Disaster Intelligence Agent")
+    risk_colors = {
+        RiskLevel.HIGH_RISK: "red",
+        RiskLevel.MODERATE_RISK: "orange",
+        RiskLevel.LOW_RISK: "green",
+    }
+    a1, a2 = st.columns([1, 2])
+    with a1:
+        st.metric("Classified Risk", assessment.risk_level.value)
+        st.markdown(
+            f"<div style='height:12px;width:100%;background:{risk_colors[assessment.risk_level]};"
+            "border-radius:8px;'></div>",
+            unsafe_allow_html=True,
+        )
+    with a2:
+        st.markdown("**Assessment**")
+        st.write(assessment.explanation)
+    st.warning(f"**Recommended action:** {assessment.recommended_action}")
+    if rag_context.sources:
+        st.caption("Knowledge grounding: " + ", ".join(rag_context.sources))
+
+    st.divider()
+
+    # ── Stage 2: Simulation Agent ──
+    st.markdown("### 2 · Simulation Agent — Flood Progression")
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Current Coverage", f"{progression.initial_coverage_percentage:.1f}%")
+    s2.metric(
+        "Projected Peak",
+        f"{progression.peak_coverage_percentage:.1f}%",
+        delta=f"{progression.peak_coverage_percentage - progression.initial_coverage_percentage:+.1f}%",
+        delta_color="inverse",
+    )
+    s3.metric(
+        "Trajectory",
+        "Expanding" if progression.expanding else "Receding",
+    )
+
+    # Projection curve (start point + each horizon).
+    proj_rows = [
+        {"Hours ahead": 0, "Projected coverage %": progression.initial_coverage_percentage}
+    ] + [
+        {
+            "Hours ahead": p.horizon_hours,
+            "Projected coverage %": p.projected_coverage_percentage,
+        }
+        for p in progression.projections
+    ]
+    proj_df = pd.DataFrame(proj_rows).set_index("Hours ahead")
+    st.line_chart(proj_df, use_container_width=True)
+
+    detail_df = pd.DataFrame(
+        [
+            {
+                "Horizon (h)": p.horizon_hours,
+                "Coverage %": p.projected_coverage_percentage,
+                "Area (km²)": p.projected_affected_area_km2,
+                "Δ Area (km²)": p.net_area_change_km2,
+                "Population at risk": p.projected_population_at_risk,
+            }
+            for p in progression.projections
+        ]
+    )
+    st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+    if progression.downstream_districts_at_risk:
+        st.markdown("**Downstream districts at risk (flood-wave propagation):**")
+        ds_df = pd.DataFrame(
+            [
+                {"District": d.district, "Wave ETA (h)": d.eta_hours}
+                for d in progression.downstream_districts_at_risk
+            ]
+        )
+        st.dataframe(ds_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No downstream propagation expected under current river conditions.")
+
+    st.info(progression.summary)
+
+    st.divider()
+
+    # ── Stage 3: Response & Communication Agent ──
+    st.markdown("### 3 · Response & Communication Agent")
+    if result.recommended_safe_zone is not None:
+        sz = result.recommended_safe_zone
+        st.success(f"Recommended safe zone: **{sz.name}** ({sz.latitude:.4f}, {sz.longitude:.4f})")
+    if result.evacuation_route is not None:
+        rt = result.evacuation_route
+        st.caption(
+            f"Route: {' → '.join(rt.path)} · {rt.distance_km:g} km · "
+            f"~{rt.estimated_travel_time_min} min"
+        )
+    r1, r2 = st.columns(2)
+    with r1:
+        st.markdown("**Citizen Alert**")
+        st.code(result.citizen_alert, language=None)
+    with r2:
+        st.markdown("**Authority Situation Report**")
+        st.code(result.authority_alert, language=None)
+    st.caption(
+        "Safe-zone discovery and routing use live OpenStreetMap data in the "
+        "Personal Flood Alert email path (sidebar)."
+    )
 
 
 def _sample_elevations(points):
@@ -945,8 +1187,8 @@ def main():
     st.divider()
 
     # Clean, non-overlapping UI using tabs
-    t1, t2, t3, t4 = st.tabs(
-        ["Overview", "Detection", "River Flows", "AI Intelligence"]
+    t1, t2, t3, t4, t5 = st.tabs(
+        ["Overview", "Detection", "River Flows", "AI Intelligence", "Disaster Workflow"]
     )
 
     with t1:
@@ -1312,6 +1554,16 @@ def main():
         )
 
         render_rag_chatbot()
+
+    with t5:
+        render_disaster_workflow(
+            district=district,
+            geom=geom,
+            pct_current=pct_current,
+            pct_2010=pct_2010,
+            affected_area_km2=unet_result.get("affected_area_km2", 0.0),
+            matched_station=matched_station,
+        )
 
 
 if __name__ == "__main__":
