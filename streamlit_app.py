@@ -684,189 +684,20 @@ def _maybe_send_flood_alert(
 st.set_page_config(page_title="FloodSense-PK Dashboard", layout="wide")
 
 
-def inject_dark_theme():
-    # Enhanced CSS for mobile responsiveness and modern UI
-    st.markdown(
-        """
-        <style>
-        /* Base container adjustments */
-        .block-container {
-            padding-top: 2rem;
-            padding-bottom: 2rem;
-            max-width: 1600px;
-        }
-        
-        /* Mobile specific adjustments */
-        @media (max-width: 768px) {
-            .block-container { 
-                padding-left: 1rem; 
-                padding-right: 1rem; 
-                padding-top: 1rem;
-            }
-            .header-title { font-size: 1.8rem !important; }
-            .header-subtitle { font-size: 0.9rem !important; }
-            .stMetric label { font-size: 0.8rem !important; }
-            .stMetric div[data-testid="stMetricValue"] { font-size: 1.5rem !important; }
-        }
+# ── Design system (ui/theme.py): CSS, Plotly template, HTML components ──
+from ui.theme import (
+    PALETTE,
+    callout,
+    hero,
+    inject_css,
+    metric_card,
+    metric_row,
+    risk_gauge,
+    setup_plotly_theme,
+)
 
-        /* Metric card styling */
-        div[data-testid="metric-container"] {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 12px;
-            padding: 15px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        
-        /* Tab styling */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-        }
-        .stTabs [data-baseweb="tab"] {
-            background-color: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 8px 8px 0 0;
-            padding: 8px 16px;
-            height: auto;
-        }
-        .stTabs [aria-selected="true"] {
-            background-color: rgba(51, 102, 204, 0.15) !important;
-            border-color: #3366cc !important;
-        }
-
-        /* Custom Header Classes */
-        .custom-header {
-            padding: 1.5rem;
-            border-radius: 12px;
-            background: linear-gradient(90deg, rgba(51, 102, 204, 0.1) 0%, rgba(51, 102, 204, 0.02) 100%);
-            border-left: 6px solid #3366cc;
-            margin-bottom: 2rem;
-        }
-        .header-title {
-            margin: 0;
-            padding: 0;
-            font-size: 2.5rem;
-            font-weight: 700;
-            color: #ffffff;
-            line-height: 1.2;
-        }
-        .header-subtitle {
-            margin: 0.5rem 0 0 0;
-            padding: 0;
-            font-size: 1.2rem;
-            color: #8aa5ff;
-            font-weight: 400;
-            letter-spacing: 0.5px;
-        }
-
-        /* ── Agentic pipeline banner ── */
-        .agent-flow {
-            display: flex;
-            align-items: stretch;
-            gap: 0;
-            margin: 0.5rem 0 1.25rem 0;
-            flex-wrap: wrap;
-        }
-        .agent-card {
-            flex: 1 1 0;
-            min-width: 150px;
-            background: linear-gradient(160deg, rgba(51,102,204,0.12) 0%, rgba(255,255,255,0.02) 100%);
-            border: 1px solid rgba(138,165,255,0.25);
-            border-radius: 12px;
-            padding: 0.9rem 0.8rem;
-            text-align: center;
-            position: relative;
-        }
-        .agent-card .agent-step {
-            font-size: 0.68rem; font-weight: 700; letter-spacing: 2px;
-            color: #8aa5ff;
-        }
-        .agent-card .agent-name {
-            font-size: 1rem; font-weight: 700; color: #ffffff;
-            margin-top: 0.35rem; letter-spacing: 0.3px;
-        }
-        .agent-card .agent-role {
-            font-size: 0.78rem; color: #aab6d8; margin-top: 0.2rem;
-        }
-        .agent-card .agent-status {
-            display: inline-block; margin-top: 0.55rem;
-            font-size: 0.68rem; font-weight: 700; letter-spacing: 1px;
-            padding: 3px 12px; border-radius: 999px;
-            background: rgba(46, 204, 113, 0.15); color: #2ecc71;
-            border: 1px solid rgba(46, 204, 113, 0.4);
-        }
-        .agent-arrow {
-            display: flex; align-items: center; justify-content: center;
-            font-size: 1.2rem; color: #8aa5ff; padding: 0 6px;
-        }
-        @media (max-width: 768px) {
-            .agent-flow { flex-direction: column; }
-            .agent-arrow { transform: rotate(90deg); padding: 2px 0; }
-        }
-
-        /* ── Stream (input) chips ── */
-        .stream-chip {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 10px;
-            padding: 0.7rem 0.9rem;
-            height: 100%;
-        }
-        .stream-chip .chip-label {
-            font-size: 0.7rem; letter-spacing: 1.2px; color: #aab6d8;
-            text-transform: uppercase; font-weight: 700;
-        }
-        .stream-chip .chip-value {
-            font-size: 1.15rem; font-weight: 700; color: #ffffff; margin-top: 2px;
-        }
-        .stream-chip .chip-sub { font-size: 0.78rem; color: #8aa5ff; margin-top: 2px; }
-
-        /* ── Chat hero ── */
-        .chat-hero {
-            padding: 1.1rem 1.4rem;
-            border-radius: 14px;
-            background: linear-gradient(120deg, rgba(51,102,204,0.18) 0%, rgba(102,51,204,0.10) 100%);
-            border: 1px solid rgba(138,165,255,0.3);
-            margin-bottom: 1rem;
-        }
-        .chat-hero .chat-title {
-            font-size: 1.35rem; font-weight: 700; color: #ffffff; margin: 0;
-        }
-        .chat-hero .chat-sub { font-size: 0.85rem; color: #b9c6f2; margin: 0.3rem 0 0 0; }
-        .kb-badge {
-            display: inline-block; margin-top: 0.55rem; margin-right: 0.4rem;
-            font-size: 0.68rem; font-weight: 600;
-            padding: 3px 12px; border-radius: 999px;
-            background: rgba(46, 204, 113, 0.12); color: #2ecc71;
-            border: 1px solid rgba(46, 204, 113, 0.35);
-        }
-        .kb-badge.dim {
-            background: rgba(255,255,255,0.05); color: #93a1c9;
-            border-color: rgba(255,255,255,0.15);
-        }
-
-        /* ── Alert preview boxes ── */
-        .alert-box {
-            border-radius: 12px; padding: 1rem 1.1rem; height: 100%;
-            border: 1px solid rgba(255,255,255,0.10);
-            background: rgba(255,255,255,0.02);
-            font-size: 0.9rem; line-height: 1.6; color: #e8ecf8;
-            white-space: pre-wrap;
-        }
-        .alert-box.citizen { border-left: 5px solid #e67e22; }
-        .alert-box.authority { border-left: 5px solid #3366cc; }
-        .alert-box .alert-tag {
-            font-size: 0.66rem; font-weight: 700; letter-spacing: 1px;
-            text-transform: uppercase; color: #93a1c9; display: block;
-            margin-bottom: 0.45rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-inject_dark_theme()
+inject_css()
+setup_plotly_theme()
 
 
 def preprocess_image(tif_bytes):
@@ -1376,21 +1207,18 @@ def render_rag_chatbot():
 
 def main():
     # ── Professional Executive Header ──
-    st.markdown(
-        """
-        <div class="custom-header">
-            <h1 class="header-title">FloodSense-PK</h1>
-            <p class="header-subtitle">National Flood Intelligence & Early Warning System</p>
-        </div>
-    """,
-        unsafe_allow_html=True,
+    hero(
+        title="FloodSense-PK",
+        subtitle="National Flood Intelligence & Early Warning System",
+        status_text=f"LIVE · {datetime.now().strftime('%d %b %Y')}",
+        badges=["Sentinel-1 SAR", "U-Net ResNet34", "Google Earth Engine", "FFD Live Feed", "RAG Knowledge Base"],
     )
 
     gdf, _ = load_districts_cached()
 
     # Scale selector
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### Analysis Scale")
+    st.sidebar.markdown("### 📍 Area")
     analysis_scale = st.sidebar.selectbox(
         "Select Scope",
         ["District", "Province", "National"],
@@ -1428,14 +1256,14 @@ def main():
             "District (Pre-defined)", options=opts, index=0 if opts else 0
         )
 
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Advanced: Search Custom Area")
     search_name = st.sidebar.text_input(
-        "Enter Area Name (Overrides Scale)",
+        "Search custom area (overrides scale)",
         help="Type a city or tehsil name. If found, it will override the scale selection.",
     )
 
     # Date range
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📅 Dates")
     default_end = datetime.now().date()
     default_start = default_end - timedelta(days=30)
     start_date = st.sidebar.date_input("Current SAR start date", value=default_start)
@@ -1443,7 +1271,7 @@ def main():
 
     # Personal flood-alert subscription
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### Personal Flood Alert")
+    st.sidebar.markdown("### 🔔 Personal Flood Alert")
     recipient_email = st.sidebar.text_input(
         "Your email (optional)",
         help=(
@@ -1465,7 +1293,12 @@ def main():
     # Results persist in session state, so widget clicks (view toggles, chat)
     # re-render the last analysis instead of wiping the page.
     if not run and "analysis" not in st.session_state:
-        st.info("Select a scale/district and press Run analysis.")
+        callout(
+            "Select a scale/district in the sidebar and press <b>Run analysis</b> "
+            "to generate the flood intelligence dashboard.",
+            kind="info",
+            title="Getting Started",
+        )
         # Knowledge assistant is available even before an analysis run.
         render_rag_chatbot()
         return
@@ -1764,7 +1597,11 @@ def main():
                 caption="Satellite: Landsat-5 | Method: MNDWI",
                 width="stretch",
             )
-            st.info("2010 Context: Peak flood footprint during the 2010 disaster.")
+            callout(
+                "Peak flood footprint during the 2010 disaster.",
+                kind="info",
+                title="2010 Context",
+            )
         with col_img2:
             st.markdown(f"#### **[B] Current Situation ({start_date})**")
             st.image(
@@ -1772,63 +1609,85 @@ def main():
                 caption="Satellite: Sentinel-1 SAR | Method: UNet AI",
                 use_container_width=True,
             )
-            st.info("Live Status: Latest available radar-based water detection.")
+            callout(
+                "Latest available radar-based water detection.",
+                kind="success",
+                title="Live Status",
+            )
 
         st.divider()
 
         # ── Metrics Section ──
         st.subheader("Statistical Analysis")
-        c1, c2, c3 = st.columns(3)
-
-        c1.metric(
-            "2010 HISTORICAL %",
-            f"{pct_2010:.2f}%",
-            help="Total district area flooded in 2010.",
-        )
-        c2.metric(
-            "CURRENT FLOOD %",
-            f"{pct_current:.2f}%",
-            help="Current area flooded as detected by Sentinel-1/UNet.",
-        )
-
         delta = float(pct_current) - float(pct_2010)
-        c3.metric(
-            "DELTA SEVERITY",
-            f"{delta:+.2f}%",
-            delta=f"{delta:+.2f}%",
-            delta_color="inverse",
-            help="Current % - 2010 %. Positive means worse than 2010.",
+        severity_ratio = (pct_current / (pct_2010 if pct_2010 > 0 else 1)) * 100
+        metric_row(
+            [
+                metric_card(
+                    "2010 Historical %",
+                    f"{pct_2010:.2f}%",
+                    sub="Total district area flooded in 2010",
+                    accent=PALETTE["cyan"],
+                ),
+                metric_card(
+                    "Current Flood %",
+                    f"{pct_current:.2f}%",
+                    sub="Sentinel-1 SAR + UNet detection",
+                    accent=PALETTE["primary"],
+                ),
+                metric_card(
+                    "Delta Severity",
+                    f"{delta:+.2f}%",
+                    sub="Current minus 2010 benchmark",
+                    trend=("▲ worse than 2010" if delta > 0 else "▼ below 2010 peak"),
+                    trend_dir=("bad" if delta > 0 else "good"),
+                    accent=(PALETTE["danger"] if delta > 0 else PALETTE["success"]),
+                ),
+            ]
         )
 
-        st.markdown(f"""
-        ### **Risk Governance Summary**
-        *   **Defensible Risk Score:** **{risk_score}/10** (Computed via Weighted Multi-Factor Analysis)
-        *   **Comparative Severity:** Current flooding is **{ (pct_current / (pct_2010 if pct_2010 > 0 else 1)) * 100:.1f}%** of the 2010 benchmark.
-        """)
-
-        st.progress(min(1.0, risk_score / 10.0))
+        # ── Risk Governance ──
+        g_col, s_col = st.columns([1, 1.35])
+        with g_col:
+            st.plotly_chart(
+                risk_gauge(risk_score, title="Defensible Risk Score"),
+                use_container_width=True,
+            )
+        with s_col:
+            st.markdown("### Risk Governance Summary")
+            st.markdown(
+                f"- **Defensible Risk Score:** **{risk_score}/10** "
+                "(Weighted Multi-Factor Analysis)\n"
+                f"- **Comparative Severity:** Current flooding is "
+                f"**{severity_ratio:.1f}%** of the 2010 benchmark."
+            )
+            st.caption("Weights: Flood extent 40 · Delta vs 2010 30 · Hydraulic 30")
 
         st.divider()
 
         st.markdown("### Local River Monitoring")
         if matched_station:
-            st.success(
-                f"**Station:** {matched_station['station']} | **River:** {matched_station['river']} | **Status:** {matched_station['status']}"
-            )
-            # Add trend indicators
             itrend = matched_station.get("inflow_trend", "Steady")
             otrend = matched_station.get("outflow_trend", "Steady")
             i_icon = "↑" if "Rising" in itrend else "↓" if "Falling" in itrend else "→"
             o_icon = "↑" if "Rising" in otrend else "↓" if "Falling" in otrend else "→"
-
-            st.caption(
-                f"**Inflow:** {matched_station.get('inflow')} {i_icon} ({itrend}) | "
-                f"**Outflow:** {matched_station.get('outflow')} {o_icon} ({otrend})"
+            callout(
+                f"<b>Station:</b> {matched_station['station']} &nbsp;·&nbsp; "
+                f"<b>River:</b> {matched_station['river']} &nbsp;·&nbsp; "
+                f"<b>Status:</b> {matched_station['status']}<br>"
+                f"<b>Inflow:</b> {matched_station.get('inflow')} {i_icon} ({itrend}) &nbsp;·&nbsp; "
+                f"<b>Outflow:</b> {matched_station.get('outflow')} {o_icon} ({otrend})<br>"
+                f"<span style='color:#8A94AD;font-size:12px'>Last updated: "
+                f"{matched_station.get('recorded', 'N/A')}</span>",
+                kind="success",
+                title="Gauge Station Matched",
             )
-            st.caption(f"Last Updated: {matched_station.get('recorded', 'N/A')}")
         else:
-            st.warning(
-                "**Data Gap:** No hydraulic monitoring station found for this district boundary. Confidence in river status is reduced."
+            callout(
+                "No hydraulic monitoring station found for this district boundary. "
+                "Confidence in river status is reduced.",
+                kind="warning",
+                title="Data Gap",
             )
 
     with t2:
@@ -1870,10 +1729,28 @@ def main():
 
         st.divider()
         st.markdown("### Model Performance Metrics")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Pixel Water Coverage", f"{pct_current:.2f}%")
-        m2.metric("Total Affected Area", f"{unet_result['affected_area_km2']:.1f} km²")
-        m3.metric("AI Architecture", "ResNet34-UNet (Tiled)")
+        metric_row(
+            [
+                metric_card(
+                    "Pixel Water Coverage",
+                    f"{pct_current:.2f}%",
+                    sub="Share of analysed pixels classified as water",
+                    accent=PALETTE["primary"],
+                ),
+                metric_card(
+                    "Total Affected Area",
+                    f"{unet_result['affected_area_km2']:.1f} km²",
+                    sub="Derived from detected extent",
+                    accent=PALETTE["cyan"],
+                ),
+                metric_card(
+                    "AI Architecture",
+                    "ResNet34-UNet",
+                    sub="Tiled inference · 256 px windows",
+                    accent=PALETTE["success"],
+                ),
+            ]
+        )
 
     with t3:
         st.subheader("Hydraulic Intelligence: FFC River Discharge")
