@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import io
 import json
@@ -14,6 +15,7 @@ import cv2
 from shapely.geometry import shape
 
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import pydeck as pdk
 from qdrant_client import QdrantClient
 from rag import EmbeddingPipeline, ingest_documents, rag_query
@@ -161,14 +163,11 @@ def render_disaster_workflow(
     Satellite + River + Historical + RAG
       → Disaster Intelligence Agent → Simulation Agent → Response & Communication.
     """
-    st.subheader("End-to-End Disaster Intelligence Workflow")
+    st.subheader("Agentic Command Center")
     st.caption(
-        "A single orchestrated run chaining all four platform agents — exactly the "
-        "flow described in final-workflow.md."
-    )
-    st.markdown(
-        "`Satellite + River + Historical + RAG` → **Disaster Intelligence Agent** "
-        "→ **Simulation Agent** → **Response & Communication Agent**"
+        "Four autonomous agents run in sequence — each consumes the previous "
+        "agent's structured output: data fusion, risk classification, "
+        "flood simulation, and response generation."
     )
 
     # ── Assemble the four input streams from the dashboard's live data ──
@@ -206,14 +205,22 @@ def render_disaster_workflow(
         benchmark_flood_percentage=min(float(pct_2010), 100.0),
     )
 
-    with st.spinner("Retrieving RAG knowledge context…"):
-        rag_context = _build_rag_context(district)
-
     population_at_risk = int(float(affected_area_km2) * ESTIMATED_POP_DENSITY_PER_KM2)
     # Only needed when current coverage is ~0% (area can't be derived from extent).
     district_area = None if float(pct_current) > 0.01 else _district_area_km2(geom)
 
-    with st.spinner("Running the four-agent workflow…"):
+    # ── Live agent activity log ──
+    with st.status("Orchestrating the four-agent pipeline…", expanded=True) as status:
+        st.write("**Data Fusion Agent** — merging satellite, hydraulic and historical streams…")
+        st.write("**Data Fusion Agent** — querying RAG knowledge base for district context…")
+        rag_context = _build_rag_context(district)
+        st.write(
+            f"**Data Fusion Agent** — done. Fused 4 streams "
+            f"({len(rag_context.sources)} knowledge sources grounded)."
+        )
+        st.write("**Disaster Intelligence Agent** — classifying multi-factor risk…")
+        st.write("**Simulation Agent** — projecting flood progression across horizons…")
+        st.write("**Response Agent** — drafting citizen and authority communications…")
         result = run_pipeline(
             satellite,
             hydraulic,
@@ -222,114 +229,303 @@ def render_disaster_workflow(
             population_at_risk=population_at_risk,
             district_area_km2=district_area,
         )
+        st.write("**Pipeline** — all agents completed.")
+        status.update(
+            label="Agent pipeline complete — 4 of 4 agents finished",
+            state="complete",
+            expanded=False,
+        )
 
     assessment = result.assessment
     progression = result.progression
 
-    # ── Stage 1: Disaster Intelligence Agent ──
-    st.markdown("### 1 · Disaster Intelligence Agent")
-    risk_colors = {
-        RiskLevel.HIGH_RISK: "red",
-        RiskLevel.MODERATE_RISK: "orange",
-        RiskLevel.LOW_RISK: "green",
-    }
-    a1, a2 = st.columns([1, 2])
-    with a1:
-        st.metric("Classified Risk", assessment.risk_level.value)
-        st.markdown(
-            f"<div style='height:12px;width:100%;background:{risk_colors[assessment.risk_level]};"
-            "border-radius:8px;'></div>",
-            unsafe_allow_html=True,
-        )
-    with a2:
-        st.markdown("**Assessment**")
-        st.write(assessment.explanation)
-    st.warning(f"**Recommended action:** {assessment.recommended_action}")
-    if rag_context.sources:
-        st.caption("Knowledge grounding: " + ", ".join(rag_context.sources))
-
-    st.divider()
-
-    # ── Stage 2: Simulation Agent ──
-    st.markdown("### 2 · Simulation Agent — Flood Progression")
-    s1, s2, s3 = st.columns(3)
-    s1.metric("Current Coverage", f"{progression.initial_coverage_percentage:.1f}%")
-    s2.metric(
-        "Projected Peak",
-        f"{progression.peak_coverage_percentage:.1f}%",
-        delta=f"{progression.peak_coverage_percentage - progression.initial_coverage_percentage:+.1f}%",
-        delta_color="inverse",
-    )
-    s3.metric(
-        "Trajectory",
-        "Expanding" if progression.expanding else "Receding",
-    )
-
-    # Projection curve (start point + each horizon).
-    proj_rows = [
-        {"Hours ahead": 0, "Projected coverage %": progression.initial_coverage_percentage}
-    ] + [
-        {
-            "Hours ahead": p.horizon_hours,
-            "Projected coverage %": p.projected_coverage_percentage,
-        }
-        for p in progression.projections
+    # ── Pipeline flow banner ──
+    _agent_cards = [
+        ("01", "Data Fusion", "Satellite · River · Historical · RAG"),
+        ("02", "Intelligence", "Risk classification"),
+        ("03", "Simulation", "Flood progression"),
+        ("04", "Response", "Alerts & evacuation"),
     ]
-    proj_df = pd.DataFrame(proj_rows).set_index("Hours ahead")
-    st.line_chart(proj_df, use_container_width=True)
+    _cards_html = "<div class='agent-flow'>"
+    for i, (step, name, role) in enumerate(_agent_cards):
+        if i:
+            _cards_html += "<div class='agent-arrow'>&#8594;</div>"
+        _cards_html += (
+            "<div class='agent-card'>"
+            f"<div class='agent-step'>STAGE {step}</div>"
+            f"<div class='agent-name'>{name} Agent</div>"
+            f"<div class='agent-role'>{role}</div>"
+            "<span class='agent-status'>COMPLETE</span>"
+            "</div>"
+        )
+    _cards_html += "</div>"
+    st.markdown(_cards_html, unsafe_allow_html=True)
 
-    detail_df = pd.DataFrame(
+    # ── Per-agent result tabs (one per pipeline stage) ──
+    tab_fusion, tab_intel, tab_sim, tab_resp = st.tabs(
         [
-            {
-                "Horizon (h)": p.horizon_hours,
-                "Coverage %": p.projected_coverage_percentage,
-                "Area (km²)": p.projected_affected_area_km2,
-                "Δ Area (km²)": p.net_area_change_km2,
-                "Population at risk": p.projected_population_at_risk,
-            }
-            for p in progression.projections
+            "Data Fusion Agent",
+            "Intelligence Agent",
+            "Simulation Agent",
+            "Response Agent",
         ]
     )
-    st.dataframe(detail_df, use_container_width=True, hide_index=True)
 
-    if progression.downstream_districts_at_risk:
-        st.markdown("**Downstream districts at risk (flood-wave propagation):**")
-        ds_df = pd.DataFrame(
-            [
-                {"District": d.district, "Wave ETA (h)": d.eta_hours}
-                for d in progression.downstream_districts_at_risk
-            ]
-        )
-        st.dataframe(ds_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No downstream propagation expected under current river conditions.")
-
-    st.info(progression.summary)
-
-    st.divider()
-
-    # ── Stage 3: Response & Communication Agent ──
-    st.markdown("### 3 · Response & Communication Agent")
-    if result.recommended_safe_zone is not None:
-        sz = result.recommended_safe_zone
-        st.success(f"Recommended safe zone: **{sz.name}** ({sz.latitude:.4f}, {sz.longitude:.4f})")
-    if result.evacuation_route is not None:
-        rt = result.evacuation_route
+    # ── 0 · Data Fusion Agent ──
+    with tab_fusion:
+        st.markdown("#### Fused input streams")
         st.caption(
-            f"Route: {' → '.join(rt.path)} · {rt.distance_km:g} km · "
-            f"~{rt.estimated_travel_time_min} min"
+            "The Data Fusion Agent merges four live data streams into one "
+            "structured payload that every downstream agent consumes."
         )
-    r1, r2 = st.columns(2)
-    with r1:
-        st.markdown("**Citizen Alert**")
-        st.code(result.citizen_alert, language=None)
-    with r2:
-        st.markdown("**Authority Situation Report**")
-        st.code(result.authority_alert, language=None)
-    st.caption(
-        "Safe-zone discovery and routing use live OpenStreetMap data in the "
-        "Personal Flood Alert email path (sidebar)."
-    )
+        in1, in2, in3, in4 = st.columns(4)
+        in1.markdown(
+            "<div class='stream-chip'><span class='chip-label'>Satellite</span>"
+            f"<div class='chip-value'>{satellite.flood_extent_percentage:.2f}%</div>"
+            f"<div class='chip-sub'>{satellite.affected_area_km2:,.0f} km² flooded</div></div>",
+            unsafe_allow_html=True,
+        )
+        in2.markdown(
+            "<div class='stream-chip'><span class='chip-label'>Hydraulic</span>"
+            f"<div class='chip-value'>{hydraulic.status.value}</div>"
+            f"<div class='chip-sub'>{hydraulic.station} · {hydraulic.trend.value}</div></div>",
+            unsafe_allow_html=True,
+        )
+        in3.markdown(
+            "<div class='stream-chip'><span class='chip-label'>Historical</span>"
+            f"<div class='chip-value'>{historical.benchmark_flood_percentage:.2f}%</div>"
+            f"<div class='chip-sub'>{historical.benchmark_year} benchmark</div></div>",
+            unsafe_allow_html=True,
+        )
+        in4.markdown(
+            "<div class='stream-chip'><span class='chip-label'>RAG Knowledge</span>"
+            f"<div class='chip-value'>{len(rag_context.sources)} sources</div>"
+            f"<div class='chip-sub'>{', '.join(rag_context.sources[:2]) or 'no grounding'}</div></div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("")
+        f1, f2 = st.columns(2)
+        with f1:
+            st.markdown("##### Hydraulic detail")
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Field": "Station", "Value": hydraulic.station},
+                        {"Field": "Inflow (cusecs)", "Value": f"{hydraulic.inflow_cusecs:,.0f}"},
+                        {"Field": "Outflow (cusecs)", "Value": f"{hydraulic.outflow_cusecs:,.0f}"},
+                        {"Field": "Trend", "Value": hydraulic.trend.value},
+                        {"Field": "Status", "Value": hydraulic.status.value},
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        with f2:
+            st.markdown("##### Knowledge grounding")
+            if rag_context.sources:
+                for src in rag_context.sources:
+                    st.caption(f"• {src}")
+                if rag_context.context:
+                    with st.expander("Retrieved context passages", expanded=False):
+                        st.text(rag_context.context)
+            else:
+                st.caption(
+                    "No knowledge-base passages matched this district — agents "
+                    "ran on live sensor data only."
+                )
+
+    risk_palette = {
+        RiskLevel.HIGH_RISK: "#e74c3c",
+        RiskLevel.MODERATE_RISK: "#e67e22",
+        RiskLevel.LOW_RISK: "#2ecc71",
+    }
+    risk_color = risk_palette[assessment.risk_level]
+
+    # ── 1 · Disaster Intelligence Agent ──
+    with tab_intel:
+        g1, g2 = st.columns([1, 1.4])
+        with g1:
+            gauge = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=assessment.flood_coverage_percentage,
+                    number={"suffix": "%", "font": {"size": 42, "color": "#ffffff"}},
+                    title={
+                        "text": f"<b>{assessment.risk_level.value}</b><br>"
+                        "<span style='font-size:0.75em;color:#93a1c9'>Flood coverage driving the assessment</span>",
+                        "font": {"size": 16, "color": risk_color},
+                    },
+                    gauge={
+                        "axis": {"range": [0, 100], "tickcolor": "#93a1c9"},
+                        "bar": {"color": risk_color, "thickness": 0.28},
+                        "bgcolor": "rgba(0,0,0,0)",
+                        "borderwidth": 0,
+                        "steps": [
+                            {"range": [0, 10], "color": "rgba(46,204,113,0.18)"},
+                            {"range": [10, 30], "color": "rgba(230,126,34,0.18)"},
+                            {"range": [30, 100], "color": "rgba(231,76,60,0.18)"},
+                        ],
+                        "threshold": {
+                            "line": {"color": risk_color, "width": 4},
+                            "thickness": 0.85,
+                            "value": assessment.flood_coverage_percentage,
+                        },
+                    },
+                )
+            )
+            gauge.update_layout(
+                height=300,
+                margin=dict(l=30, r=30, t=70, b=10),
+                paper_bgcolor="rgba(0,0,0,0)",
+                font={"color": "#dbe4ff"},
+            )
+            st.plotly_chart(gauge, use_container_width=True)
+        with g2:
+            st.markdown("#### Risk Assessment")
+            st.write(assessment.explanation)
+            st.warning(f"**Recommended action:** {assessment.recommended_action}")
+            if rag_context.sources:
+                st.caption("Knowledge grounding: " + ", ".join(rag_context.sources))
+
+    # ── 2 · Simulation Agent ──
+    with tab_sim:
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Current Coverage", f"{progression.initial_coverage_percentage:.1f}%")
+        s2.metric(
+            "Projected Peak",
+            f"{progression.peak_coverage_percentage:.1f}%",
+            delta=f"{progression.peak_coverage_percentage - progression.initial_coverage_percentage:+.1f}%",
+            delta_color="inverse",
+        )
+        s3.metric("Trajectory", "Expanding" if progression.expanding else "Receding")
+
+        # Projection curve (start point + each horizon) as a gradient area chart.
+        hours = [0] + [p.horizon_hours for p in progression.projections]
+        coverage = [progression.initial_coverage_percentage] + [
+            p.projected_coverage_percentage for p in progression.projections
+        ]
+        peak_i = int(max(range(len(coverage)), key=coverage.__getitem__))
+
+        proj_fig = go.Figure()
+        proj_fig.add_trace(
+            go.Scatter(
+                x=hours,
+                y=coverage,
+                mode="lines+markers",
+                line={"color": "#3d7bff", "width": 3, "shape": "spline"},
+                marker={"size": 9, "color": "#8aa5ff", "line": {"color": "#3d7bff", "width": 2}},
+                fill="tozeroy",
+                fillcolor="rgba(61,123,255,0.15)",
+                name="Projected coverage",
+                hovertemplate="+%{x} h → %{y:.2f}%<extra></extra>",
+            )
+        )
+        proj_fig.add_annotation(
+            x=hours[peak_i],
+            y=coverage[peak_i],
+            text=f"Peak {coverage[peak_i]:.1f}%",
+            showarrow=True,
+            arrowhead=2,
+            arrowcolor="#e67e22",
+            font={"color": "#e67e22", "size": 13},
+            yshift=8,
+        )
+        proj_fig.update_layout(
+            title="Projected flood coverage",
+            height=340,
+            margin=dict(l=10, r=10, t=50, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": "#dbe4ff"},
+            xaxis={"title": "Hours ahead", "gridcolor": "rgba(255,255,255,0.06)"},
+            yaxis={"title": "Coverage %", "gridcolor": "rgba(255,255,255,0.06)"},
+            showlegend=False,
+        )
+        st.plotly_chart(proj_fig, use_container_width=True)
+
+        c_ds, c_tbl = st.columns([1, 1.2])
+        with c_ds:
+            st.markdown("##### Downstream flood-wave propagation")
+            if progression.downstream_districts_at_risk:
+                ds = progression.downstream_districts_at_risk
+                ds_fig = go.Figure(
+                    go.Bar(
+                        x=[d.eta_hours for d in ds],
+                        y=[d.district for d in ds],
+                        orientation="h",
+                        marker={
+                            "color": [d.eta_hours for d in ds],
+                            "colorscale": [[0, "#e74c3c"], [1, "#f4d03f"]],
+                            "reversescale": True,
+                        },
+                        text=[f"{d.eta_hours} h" for d in ds],
+                        textposition="outside",
+                        hovertemplate="%{y}: wave ETA %{x} h<extra></extra>",
+                    )
+                )
+                ds_fig.update_layout(
+                    height=90 + 45 * len(ds),
+                    margin=dict(l=10, r=40, t=10, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font={"color": "#dbe4ff"},
+                    xaxis={"title": "Wave ETA (hours)", "gridcolor": "rgba(255,255,255,0.06)"},
+                    yaxis={"autorange": "reversed"},
+                )
+                st.plotly_chart(ds_fig, use_container_width=True)
+            else:
+                st.caption("No downstream propagation expected under current river conditions.")
+        with c_tbl:
+            st.markdown("##### Horizon detail")
+            detail_df = pd.DataFrame(
+                [
+                    {
+                        "Horizon (h)": p.horizon_hours,
+                        "Coverage %": p.projected_coverage_percentage,
+                        "Area (km²)": p.projected_affected_area_km2,
+                        "Δ Area (km²)": p.net_area_change_km2,
+                        "Population at risk": p.projected_population_at_risk,
+                    }
+                    for p in progression.projections
+                ]
+            )
+            st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+        st.info(progression.summary)
+
+    # ── 3 · Response & Communication Agent ──
+    with tab_resp:
+        if result.recommended_safe_zone is not None:
+            sz = result.recommended_safe_zone
+            z1, z2, z3 = st.columns(3)
+            z1.metric("Safe Zone", sz.name)
+            if result.evacuation_route is not None:
+                rt = result.evacuation_route
+                z2.metric("Distance", f"{rt.distance_km:g} km")
+                z3.metric("Travel Time", f"~{rt.estimated_travel_time_min} min")
+                st.success(
+                    f"**Evacuation route:** {' → '.join(rt.path)}  \n"
+                    f"Destination coordinates: `{sz.latitude:.4f}, {sz.longitude:.4f}` · "
+                    f"[Open in Google Maps](https://www.google.com/maps/dir/?api=1&destination={sz.latitude},{sz.longitude})"
+                )
+        r1, r2 = st.columns(2)
+        with r1:
+            st.markdown(
+                "<div class='alert-box citizen'><span class='alert-tag'>Citizen Alert</span>"
+                f"{result.citizen_alert}</div>",
+                unsafe_allow_html=True,
+            )
+        with r2:
+            st.markdown(
+                "<div class='alert-box authority'><span class='alert-tag'>Authority Situation Report</span>"
+                f"{result.authority_alert}</div>",
+                unsafe_allow_html=True,
+            )
+        st.caption(
+            "Safe-zone discovery and routing use live OpenStreetMap data in the "
+            "Personal Flood Alert email path (sidebar)."
+        )
 
 
 def _sample_elevations(points):
@@ -386,7 +582,7 @@ def _maybe_send_flood_alert(
     risk_level = _risk_level_from_score(risk_score)
     if risk_level != RiskLevel.HIGH_RISK and not always_email:
         st.info(
-            f"📭 No alert email sent — current risk for {district} is "
+            f"No alert email sent — current risk for {district} is "
             f"**{risk_level.value}**. Tick *“Email me regardless of risk level”* "
             "in the sidebar to receive it anyway."
         )
@@ -400,7 +596,7 @@ def _maybe_send_flood_alert(
         try:
             raw_shelters = fetch_osm_safe_zones(origin_lat, origin_lon, radius_m=20000)
         except Exception as e:  # Overpass timeout / network / HTTP error
-            st.error(f"⚠️ Could not query OpenStreetMap for safe zones: {e}")
+            st.error(f"Could not query OpenStreetMap for safe zones: {e}")
             return
 
     if not raw_shelters:
@@ -462,17 +658,17 @@ def _maybe_send_flood_alert(
                 route=route,
             )
         st.success(
-            f"✅ Flood alert emailed to **{recipient_email}** — directing them to "
+            f"Flood alert emailed to **{recipient_email}** — directing them to "
             f"**{safe_zone.name}** "
             f"({safe_zone.latitude:.5f}, {safe_zone.longitude:.5f}), "
             f"{route.distance_km:g} km, ~{route.estimated_travel_time_min} min."
         )
     except EmailConfigError as e:
         st.error(
-            f"⚠️ Email not configured, alert not sent: {e}"
+            f"Email not configured, alert not sent: {e}"
         )
     except Exception as e:  # network/auth/SMTP errors must not crash the dashboard
-        st.error(f"⚠️ Failed to send alert email to {recipient_email}: {e}")
+        st.error(f"Failed to send alert email to {recipient_email}: {e}")
 
 st.set_page_config(page_title="FloodSense-PK Dashboard", layout="wide")
 
@@ -550,6 +746,108 @@ def inject_dark_theme():
             color: #8aa5ff;
             font-weight: 400;
             letter-spacing: 0.5px;
+        }
+
+        /* ── Agentic pipeline banner ── */
+        .agent-flow {
+            display: flex;
+            align-items: stretch;
+            gap: 0;
+            margin: 0.5rem 0 1.25rem 0;
+            flex-wrap: wrap;
+        }
+        .agent-card {
+            flex: 1 1 0;
+            min-width: 150px;
+            background: linear-gradient(160deg, rgba(51,102,204,0.12) 0%, rgba(255,255,255,0.02) 100%);
+            border: 1px solid rgba(138,165,255,0.25);
+            border-radius: 12px;
+            padding: 0.9rem 0.8rem;
+            text-align: center;
+            position: relative;
+        }
+        .agent-card .agent-step {
+            font-size: 0.68rem; font-weight: 700; letter-spacing: 2px;
+            color: #8aa5ff;
+        }
+        .agent-card .agent-name {
+            font-size: 1rem; font-weight: 700; color: #ffffff;
+            margin-top: 0.35rem; letter-spacing: 0.3px;
+        }
+        .agent-card .agent-role {
+            font-size: 0.78rem; color: #aab6d8; margin-top: 0.2rem;
+        }
+        .agent-card .agent-status {
+            display: inline-block; margin-top: 0.55rem;
+            font-size: 0.68rem; font-weight: 700; letter-spacing: 1px;
+            padding: 3px 12px; border-radius: 999px;
+            background: rgba(46, 204, 113, 0.15); color: #2ecc71;
+            border: 1px solid rgba(46, 204, 113, 0.4);
+        }
+        .agent-arrow {
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.2rem; color: #8aa5ff; padding: 0 6px;
+        }
+        @media (max-width: 768px) {
+            .agent-flow { flex-direction: column; }
+            .agent-arrow { transform: rotate(90deg); padding: 2px 0; }
+        }
+
+        /* ── Stream (input) chips ── */
+        .stream-chip {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 10px;
+            padding: 0.7rem 0.9rem;
+            height: 100%;
+        }
+        .stream-chip .chip-label {
+            font-size: 0.7rem; letter-spacing: 1.2px; color: #aab6d8;
+            text-transform: uppercase; font-weight: 700;
+        }
+        .stream-chip .chip-value {
+            font-size: 1.15rem; font-weight: 700; color: #ffffff; margin-top: 2px;
+        }
+        .stream-chip .chip-sub { font-size: 0.78rem; color: #8aa5ff; margin-top: 2px; }
+
+        /* ── Chat hero ── */
+        .chat-hero {
+            padding: 1.1rem 1.4rem;
+            border-radius: 14px;
+            background: linear-gradient(120deg, rgba(51,102,204,0.18) 0%, rgba(102,51,204,0.10) 100%);
+            border: 1px solid rgba(138,165,255,0.3);
+            margin-bottom: 1rem;
+        }
+        .chat-hero .chat-title {
+            font-size: 1.35rem; font-weight: 700; color: #ffffff; margin: 0;
+        }
+        .chat-hero .chat-sub { font-size: 0.85rem; color: #b9c6f2; margin: 0.3rem 0 0 0; }
+        .kb-badge {
+            display: inline-block; margin-top: 0.55rem; margin-right: 0.4rem;
+            font-size: 0.68rem; font-weight: 600;
+            padding: 3px 12px; border-radius: 999px;
+            background: rgba(46, 204, 113, 0.12); color: #2ecc71;
+            border: 1px solid rgba(46, 204, 113, 0.35);
+        }
+        .kb-badge.dim {
+            background: rgba(255,255,255,0.05); color: #93a1c9;
+            border-color: rgba(255,255,255,0.15);
+        }
+
+        /* ── Alert preview boxes ── */
+        .alert-box {
+            border-radius: 12px; padding: 1rem 1.1rem; height: 100%;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(255,255,255,0.02);
+            font-size: 0.9rem; line-height: 1.6; color: #e8ecf8;
+            white-space: pre-wrap;
+        }
+        .alert-box.citizen { border-left: 5px solid #e67e22; }
+        .alert-box.authority { border-left: 5px solid #3366cc; }
+        .alert-box .alert-tag {
+            font-size: 0.66rem; font-weight: 700; letter-spacing: 1px;
+            text-transform: uppercase; color: #93a1c9; display: block;
+            margin-bottom: 0.45rem;
         }
         </style>
         """,
@@ -723,7 +1021,48 @@ def match_station_to_district(district_name: str, river_flows: list[dict]):
     return None
 
 
+# GEE single-request download cap (pixels per side) — larger images are tiled.
+GEE_MAX_TILE_PX = 1024
+
+
+def _bbox_pixel_dims(bbox, size):
+    """Pixel width/height for a bbox where ``size`` is the long-side pixels."""
+    w_deg = bbox[2] - bbox[0]
+    h_deg = bbox[3] - bbox[1]
+    if w_deg >= h_deg:
+        px_w = int(size)
+        px_h = max(1, int(round(size * h_deg / w_deg)))
+    else:
+        px_h = int(size)
+        px_w = max(1, int(round(size * w_deg / h_deg)))
+    return px_w, px_h
+
+
+def _download_sar_tile(masked_image, tile_bbox, px_w, px_h):
+    """Download one GeoTIFF tile from GEE and return it as a float32 array."""
+    url = masked_image.getDownloadURL(
+        {
+            "region": tile_bbox,
+            "dimensions": f"{px_w}x{px_h}",
+            "format": "GEO_TIFF",
+            "bands": ["VV"],
+        }
+    )
+    res = requests.get(url, timeout=300)
+    res.raise_for_status()
+    with rasterio.open(io.BytesIO(res.content)) as src:
+        return src.read(1).astype(np.float32)
+
+
 def fetch_current_sar_image(bbox, date_start, date_end, size=256):
+    """Fetch the Sentinel-1 VV composite for ``bbox`` as GeoTIFF bytes.
+
+    Requests up to ``GEE_MAX_TILE_PX`` are a single download (fast path).
+    Larger ``size`` values — needed to keep full ~80 m resolution over big
+    districts — are split into a grid of aligned sub-bbox tiles, downloaded in
+    parallel, stitched into one array, and re-encoded as a single GeoTIFF so
+    every downstream consumer (rasterio / tiled UNet) works unchanged.
+    """
     if isinstance(date_start, str):
         date_start = datetime.strptime(date_start, "%Y-%m-%d")
     if isinstance(date_end, str):
@@ -754,22 +1093,88 @@ def fetch_current_sar_image(bbox, date_start, date_end, size=256):
     slope_mask = ee.Terrain.slope(elevation).lt(15)
     masked_image = image.updateMask(slope_mask).unmask(0)
 
-    # ✅ GeoTIFF — rasterio can read this properly
-    url = masked_image.getDownloadURL(
-        {
-            "region": bbox,
-            "dimensions": size,
-            "format": "GEO_TIFF",
-            "bands": ["VV"],
-        }
+    px_w, px_h = _bbox_pixel_dims(bbox, size)
+
+    # ── Fast path: fits in a single GEE request ──
+    if max(px_w, px_h) <= GEE_MAX_TILE_PX:
+        url = masked_image.getDownloadURL(
+            {
+                "region": bbox,
+                "dimensions": size,
+                "format": "GEO_TIFF",
+                "bands": ["VV"],
+            }
+        )
+        # Increase timeout for large area exports
+        res = requests.get(url, timeout=300)
+        res.raise_for_status()
+        print(f"  GeoTIFF downloaded: {len(res.content)} bytes")
+        return res.content  # raw GeoTIFF bytes
+
+    # ── Tiled path: full-resolution mosaic of the whole district ──
+    minx, miny, maxx, maxy = bbox
+    w_deg, h_deg = maxx - minx, maxy - miny
+    tiles_x = -(-px_w // GEE_MAX_TILE_PX)  # ceil division
+    tiles_y = -(-px_h // GEE_MAX_TILE_PX)
+
+    # Global pixel edges keep every tile perfectly aligned on the shared grid.
+    x_edges = [round(i * px_w / tiles_x) for i in range(tiles_x + 1)]
+    y_edges = [round(i * px_h / tiles_y) for i in range(tiles_y + 1)]
+
+    jobs = []  # (row, col, tile_bbox, tile_px_w, tile_px_h)
+    for iy in range(tiles_y):
+        for ix in range(tiles_x):
+            tile_bbox = [
+                minx + (x_edges[ix] / px_w) * w_deg,
+                maxy - (y_edges[iy + 1] / px_h) * h_deg,
+                minx + (x_edges[ix + 1] / px_w) * w_deg,
+                maxy - (y_edges[iy] / px_h) * h_deg,
+            ]
+            jobs.append(
+                (
+                    iy,
+                    ix,
+                    tile_bbox,
+                    x_edges[ix + 1] - x_edges[ix],
+                    y_edges[iy + 1] - y_edges[iy],
+                )
+            )
+
+    print(
+        f"  Tiled SAR fetch: {px_w}x{px_h}px as {tiles_x}x{tiles_y} grid "
+        f"({len(jobs)} tiles)"
     )
 
-    # Increase timeout for large area exports
-    res = requests.get(url, timeout=300)
-    res.raise_for_status()
+    canvas = np.zeros((px_h, px_w), dtype=np.float32)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            pool.submit(_download_sar_tile, masked_image, tb, tw, th): (iy, ix, tw, th)
+            for iy, ix, tb, tw, th in jobs
+        }
+        for future in futures:
+            iy, ix, tw, th = futures[future]
+            tile_arr = future.result()  # propagate download errors
+            y0, x0 = y_edges[iy], x_edges[ix]
+            canvas[y0 : y0 + th, x0 : x0 + tw] = tile_arr[:th, :tw]
+            print(f"  tile ({iy},{ix}) done: {tw}x{th}px")
 
-    print(f"  GeoTIFF downloaded: {len(res.content)} bytes")
-    return res.content  # raw GeoTIFF bytes
+    # Re-encode the stitched mosaic as one georeferenced GeoTIFF.
+    transform = rasterio.transform.from_bounds(minx, miny, maxx, maxy, px_w, px_h)
+    with rasterio.io.MemoryFile() as mem:
+        with mem.open(
+            driver="GTiff",
+            height=px_h,
+            width=px_w,
+            count=1,
+            dtype="float32",
+            crs="EPSG:4326",
+            transform=transform,
+        ) as dst:
+            dst.write(canvas, 1)
+        stitched = mem.read()
+
+    print(f"  Stitched GeoTIFF: {len(stitched)} bytes ({px_w}x{px_h}px)")
+    return stitched
 
 
 def fetch_2010_mask_image(mask_ee, bbox, size=256):
@@ -865,45 +1270,97 @@ def _rag_llm_fn(prompt: str) -> str:
     return "AI service unavailable. Please configure GEMINI_API_KEY or GROQ_API_KEY."
 
 
+RAG_SUGGESTED_QUESTIONS = [
+    "What happened in the 2010 Pakistan floods?",
+    "What are NDMA's flood evacuation protocols?",
+    "Which rivers and barrages are most flood-prone?",
+    "How should districts prepare before monsoon season?",
+]
+
+
 @st.fragment
 def render_rag_chatbot():
-    st.divider()
-    st.markdown("### Disaster Knowledge Assistant")
-    st.caption(
-        "Ask questions about Pakistan flood history, NDMA protocols, FFD river data, "
-        "and disaster response — powered by a RAG knowledge base."
+    rag_client, rag_embedder = init_rag_system()
+
+    # Knowledge-base status badges for the hero card.
+    from rag.ingest import COLLECTION_NAME
+
+    try:
+        kb_points = rag_client.count(COLLECTION_NAME).count
+    except Exception:
+        kb_points = 0
+    backend_cls = type(getattr(rag_client, "_client", rag_client)).__name__
+    kb_backend = (
+        "Qdrant · persistent" if "Remote" in backend_cls else "Qdrant · in-memory"
     )
 
-    rag_client, rag_embedder = init_rag_system()
+    st.markdown(
+        "<div class='chat-hero'>"
+        "<p class='chat-title'>Disaster Knowledge Assistant</p>"
+        "<p class='chat-sub'>Ask about Pakistan flood history, NDMA protocols, FFD "
+        "river data and disaster response — answers are grounded in the RAG "
+        "knowledge base with cited sources.</p>"
+        f"<span class='kb-badge'>{kb_points} knowledge chunks indexed</span>"
+        f"<span class='kb-badge dim'>{kb_backend}</span>"
+        "<span class='kb-badge dim'>Gemini with Groq fallback</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     if "rag_messages" not in st.session_state:
         st.session_state["rag_messages"] = []
 
+    # Suggested starter questions (only while the chat is empty).
+    pending = None
+    if not st.session_state["rag_messages"]:
+        st.markdown("**Suggested questions**")
+        sugg_cols = st.columns(2)
+        for i, q in enumerate(RAG_SUGGESTED_QUESTIONS):
+            if sugg_cols[i % 2].button(q, key=f"rag_sugg_{i}", use_container_width=True):
+                pending = q
+    else:
+        if st.button("Clear conversation", key="rag_clear"):
+            st.session_state["rag_messages"] = []
+            st.rerun(scope="fragment")
+
     for msg in st.session_state["rag_messages"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            if msg.get("sources"):
+                with st.expander("Sources", expanded=False):
+                    for src in msg["sources"]:
+                        st.caption(src)
 
-    if user_input := st.chat_input("Ask about floods, NDMA protocols, or river systems..."):
-        st.session_state["rag_messages"].append({"role": "user", "content": user_input})
+    user_input = st.chat_input("Ask about floods, NDMA protocols, or river systems...")
+    query = user_input or pending
+    if query:
+        st.session_state["rag_messages"].append({"role": "user", "content": query})
         with st.chat_message("user"):
-            st.markdown(user_input)
+            st.markdown(query)
 
         with st.chat_message("assistant"):
-            with st.spinner("Searching knowledge base..."):
+            with st.spinner("Searching knowledge base…"):
                 response, source_docs = rag_query(
-                    user_input, rag_client, rag_embedder, _rag_llm_fn
+                    query, rag_client, rag_embedder, _rag_llm_fn
                 )
             st.markdown(response)
-            if source_docs:
+            source_lines = []
+            for doc in source_docs:
+                line = f"**{doc.get('source', 'Unknown')}**"
+                if doc.get("section"):
+                    line += f" — {doc['section']}"
+                if doc.get("page_number"):
+                    line += f" (p. {doc['page_number']})"
+                source_lines.append(line)
+            if source_lines:
                 with st.expander("Sources", expanded=False):
-                    for doc in source_docs:
-                        st.caption(
-                            f"**{doc.get('source', 'Unknown')}** — {doc.get('title', '')}"
-                        )
+                    for src in source_lines:
+                        st.caption(src)
 
         st.session_state["rag_messages"].append(
-            {"role": "assistant", "content": response}
+            {"role": "assistant", "content": response, "sources": source_lines}
         )
+        st.rerun(scope="fragment")
 
 
 def main():
@@ -975,7 +1432,7 @@ def main():
 
     # Personal flood-alert subscription
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🔔 Personal Flood Alert")
+    st.sidebar.markdown("### Personal Flood Alert")
     recipient_email = st.sidebar.text_input(
         "Your email (optional)",
         help=(
@@ -996,6 +1453,8 @@ def main():
 
     if not run:
         st.info("Select a scale/district and press Run analysis.")
+        # Knowledge assistant is available even before an analysis run.
+        render_rag_chatbot()
         return
 
     # ── Geometry Resolution ──
@@ -1106,8 +1565,10 @@ def main():
     pixels_w = int((w_deg * 1.1) * 111000 / target_res_m)
     pixels_h = int((h_deg * 1.1) * 111000 / target_res_m)
 
-    # GEE Limits: 1024 is safe for memory and speed
-    final_size = max(256, min(1024, max(pixels_w, pixels_h)))
+    # Full-district resolution: sizes beyond 1024 px are fetched as an aligned
+    # tile mosaic (see fetch_current_sar_image), so big districts keep ~80 m/px.
+    # 4096 px caps memory (~64 MB float32) and UNet inference time.
+    final_size = max(256, min(4096, max(pixels_w, pixels_h)))
 
     # 1) Historical 2010 mask
     if "hist_flood_mask" not in st.session_state:
@@ -1199,15 +1660,23 @@ def main():
     prob_heatmap = render_prob_heatmap(unet_result["pred_prob"])
 
     with st.spinner("Aligning 2010 historical visuals..."):
+        # PNG visualisation stays a single GEE request — cap at 1024 px.
         hist_mask_bytes = fetch_2010_mask_image(
-            st.session_state["hist_flood_mask"], bbox=bbox, size=final_size
+            st.session_state["hist_flood_mask"], bbox=bbox, size=min(final_size, 1024)
         )
 
     st.divider()
 
     # Clean, non-overlapping UI using tabs
-    t1, t2, t3, t4, t5 = st.tabs(
-        ["Overview", "Detection", "River Flows", "AI Intelligence", "Disaster Workflow"]
+    t1, t2, t3, t4, t5, t6 = st.tabs(
+        [
+            "Overview",
+            "Detection",
+            "River Flows",
+            "AI Intelligence",
+            "Agentic Workflow",
+            "Knowledge Assistant",
+        ]
     )
 
     with t1:
@@ -1289,7 +1758,7 @@ def main():
             st.caption(f"Last Updated: {matched_station.get('recorded', 'N/A')}")
         else:
             st.warning(
-                "⚠️ **Data Gap:** No hydraulic monitoring station found for this district boundary. Confidence in river status is reduced."
+                "**Data Gap:** No hydraulic monitoring station found for this district boundary. Confidence in river status is reduced."
             )
 
     with t2:
@@ -1551,16 +2020,16 @@ def main():
                     continue
 
                 if "[SITUATION" in line.upper():
-                    st.markdown(f"#### 📡 Situation Summary")
+                    st.markdown(f"#### Situation Summary")
                     st.info(line.split("]")[-1].strip())
                 elif "[HYDRAULIC" in line.upper():
-                    st.markdown(f"#### 🌊 Hydraulic Analysis")
+                    st.markdown(f"#### Hydraulic Analysis")
                     st.write(line.split("]")[-1].strip())
                 elif "[HISTORICAL" in line.upper():
-                    st.markdown(f"#### 📜 Historical Benchmark")
+                    st.markdown(f"#### Historical Benchmark")
                     st.write(line.split("]")[-1].strip())
                 elif "[OPERATIONAL" in line.upper():
-                    st.markdown(f"#### 🚨 Operational Actions")
+                    st.markdown(f"#### Operational Actions")
                     st.warning(line.split("]")[-1].strip())
                 elif "[CONFIDENCE" in line.upper():
                     st.caption(f"**Confidence Level:** {line.split(']')[-1].strip()}")
@@ -1572,8 +2041,6 @@ def main():
             f"Governance: Weighted Risk Formula (Flood% 40, Delta 30, Hydraulic 30)"
         )
 
-        render_rag_chatbot()
-
     with t5:
         render_disaster_workflow(
             district=district,
@@ -1583,6 +2050,9 @@ def main():
             affected_area_km2=unet_result.get("affected_area_km2", 0.0),
             matched_station=matched_station,
         )
+
+    with t6:
+        render_rag_chatbot()
 
 
 if __name__ == "__main__":
