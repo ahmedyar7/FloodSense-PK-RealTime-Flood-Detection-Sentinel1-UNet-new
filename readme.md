@@ -51,6 +51,38 @@ flowchart TB
 
 <p align="center"><em>Web dashboard: District, Province, and National analysis. <a href="https://floodsense-pk.streamlit.app/">Try the live demo</a></em></p>
 
+### Redesigned Dashboard UI
+
+A complete visual overhaul of the dashboard: dark SaaS-style design system (Inter + Space Grotesk, `#0B0F19` base, electric-blue accents), gradient hero banner with live status pill, pill-style tabs, metric cards with trend chips, a Plotly risk gauge, tinted callouts, and an agent pipeline stepper — all UI-only, with the GEE / U-Net / FFD / RAG pipeline untouched.
+
+#### Overview — comparison imagery, metric cards & risk gauge
+
+<p align="center">
+  <img src="public/new%20ui/screencapture-localhost-8501-2026-07-02-14_27_01.png" alt="Redesigned Overview tab: hero banner, pill tabs, 2010 vs current comparison cards, metric cards and defensible risk gauge" width="920" />
+</p>
+
+#### Detection — U-Net outputs in card layout
+
+<p align="center">
+  <img src="public/new%20ui/screencapture-localhost-8501-2026-07-02-14_27_24.png" alt="Redesigned Detection tab: unified detection mask and confidence heatmap cards with model performance metric cards" width="920" />
+</p>
+
+#### Agentic Command Center — four-stage pipeline stepper
+
+<p align="center">
+  <img src="public/new%20ui/screencapture-localhost-8501-2026-07-02-14_27_39.png" alt="Agentic Command Center: four-stage agent stepper with COMPLETE badges and Response Agent citizen/authority alert cards" width="920" />
+</p>
+
+<p align="center">
+  <img src="public/new%20ui/screencapture-localhost-8501-2026-07-02-14_27_50.png" alt="Data Fusion Agent tab: fused input stream chips, hydraulic detail table and RAG knowledge grounding" width="920" />
+</p>
+
+#### Knowledge Assistant — RAG chatbot with cited sources
+
+<p align="center">
+  <img src="public/new%20ui/screencapture-localhost-8501-2026-07-02-14_28_09.png" alt="Knowledge Assistant tab: gradient chat hero with knowledge-base badges, suggested question chips and a grounded answer with sources" width="920" />
+</p>
+
 ---
 
 ## Table of Contents
@@ -229,17 +261,18 @@ flowchart LR
 
 ## Executive Dashboard (Web App)
 
-The **Streamlit web dashboard** runs locally at `http://localhost:8501` or on **[Streamlit Cloud](https://floodsense-pk.streamlit.app/)** with five analytical tabs after **Run analysis**.
+The **Streamlit web dashboard** runs locally at `http://localhost:8501` or on **[Streamlit Cloud](https://floodsense-pk.streamlit.app/)** with six analytical tabs after **Run analysis**.
 
-| Tab                   | Purpose                                                              |
-| --------------------- | -------------------------------------------------------------------- |
-| **Overview**          | 2010 vs Current side-by-side, Delta Severity, risk score             |
-| **Detection**         | SAR + probability heatmap + unified mask, km² affected               |
-| **River Flows**       | FFD status map, bar charts, inflow/outflow scatter                   |
-| **AI Intelligence**   | Structured Gemini tactical report + RAG knowledge chatbot (web only) |
-| **Disaster Workflow** | End-to-end four-agent run: risk → projection → response (web only)   |
+| Tab                     | Purpose                                                                     |
+| ----------------------- | --------------------------------------------------------------------------- |
+| **Overview**            | 2010 vs Current side-by-side, Delta Severity metric cards, risk gauge       |
+| **Detection**           | SAR + probability heatmap + unified mask, km² affected                      |
+| **River Flows**         | FFD status map, bar charts, inflow/outflow scatter                          |
+| **AI Intelligence**     | Structured Gemini tactical report (web only)                                |
+| **Agentic Workflow**    | Four-agent pipeline: data fusion → risk → simulation → response (web only)  |
+| **Knowledge Assistant** | RAG chatbot grounded in the disaster knowledge base, with cited sources     |
 
-> **Web vs Mobile:** The Streamlit web app has 5 tabs including River Flows, AI Intelligence, and the agentic Disaster Workflow. The Flet mobile app has 3 tabs (Home, Analysis, Profile) with login and district-based alerts.
+> **Web vs Mobile:** The Streamlit web app has 6 tabs including River Flows, the Agentic Workflow, and the Knowledge Assistant. The Flet mobile app has 3 tabs (Home, Analysis, Profile) with login and district-based alerts.
 
 ### Overview: 2010 vs Current comparison
 
