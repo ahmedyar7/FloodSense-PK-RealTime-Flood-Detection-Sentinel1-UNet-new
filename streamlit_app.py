@@ -679,10 +679,10 @@ def inject_dark_theme():
         """
         <style>
         /* Base container adjustments */
-        .block-container { 
-            padding-top: 2rem; 
+        .block-container {
+            padding-top: 2rem;
             padding-bottom: 2rem;
-            max-width: 1200px;
+            max-width: 1600px;
         }
         
         /* Mobile specific adjustments */
@@ -1686,7 +1686,18 @@ def main():
         """)
 
         # ── Visual Comparison Section ──
-        col_img1, col_img2 = st.columns(2)
+        view_mode = st.radio(
+            "Image view",
+            ["Side by side", "Large view"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="overview_view_mode",
+        )
+        if view_mode == "Side by side":
+            col_img1, col_img2 = st.columns(2)
+        else:
+            # Full-width stacked images — each uses the entire page width.
+            col_img1 = col_img2 = st.container()
         with col_img1:
             st.markdown("#### **[A] 2010 Historical Baseline**")
             st.image(
@@ -1765,7 +1776,17 @@ def main():
         st.subheader("UNet Deep Learning Analysis")
         st.caption("Detailed breakdown of AI model outputs and confidence levels.")
 
-        col_a, col_b = st.columns(2)
+        det_view = st.radio(
+            "Image view",
+            ["Side by side", "Large view"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="detection_view_mode",
+        )
+        if det_view == "Side by side":
+            col_a, col_b = st.columns(2)
+        else:
+            col_a = col_b = st.container()
 
         with col_a:
             st.markdown("#### **Unified Detection Mask**")
