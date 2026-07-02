@@ -1451,219 +1451,267 @@ def main():
         st.markdown("### Run")
         run = st.button("Run analysis", type="primary", use_container_width=True)
 
-    if not run:
+    # Results persist in session state, so widget clicks (view toggles, chat)
+    # re-render the last analysis instead of wiping the page.
+    if not run and "analysis" not in st.session_state:
         st.info("Select a scale/district and press Run analysis.")
         # Knowledge assistant is available even before an analysis run.
         render_rag_chatbot()
         return
 
-    # ── Geometry Resolution ──
-    geom = None
-    display_name = district
+    if run:
+        # ── Geometry Resolution ──
+        geom = None
+        display_name = district
 
-    if search_name.strip():
-        with st.spinner(
-            f"Searching for '{search_name}' in Pakistan (Districts/Tehsils)..."
-        ):
-            # Use FAO GAUL Level 2, filtered specifically for Pakistan
-            pakistan_fc = ee.FeatureCollection("FAO/GAUL/2015/level2").filter(
-                ee.Filter.eq("ADM0_NAME", "Pakistan")
-            )
-
-            search_term = search_name.strip()
-            # 1. Try exact match in ADM2_NAME (Districts/Sub-districts)
-            match = pakistan_fc.filter(
-                ee.Filter.eq("ADM2_NAME", search_term.capitalize())
-            )
-
-            # 2. Try partial match if exact fails
-            if match.size().getInfo() == 0:
-                match = pakistan_fc.filter(
-                    ee.Filter.stringContains("ADM2_NAME", search_term)
+        if search_name.strip():
+            with st.spinner(
+                f"Searching for '{search_name}' in Pakistan (Districts/Tehsils)..."
+            ):
+                # Use FAO GAUL Level 2, filtered specifically for Pakistan
+                pakistan_fc = ee.FeatureCollection("FAO/GAUL/2015/level2").filter(
+                    ee.Filter.eq("ADM0_NAME", "Pakistan")
                 )
 
-            # 3. Last fallback: search for Provinces/Regions
-            if match.size().getInfo() == 0:
+                search_term = search_name.strip()
+                # 1. Try exact match in ADM2_NAME (Districts/Sub-districts)
+                match = pakistan_fc.filter(
+                    ee.Filter.eq("ADM2_NAME", search_term.capitalize())
+                )
+
+                # 2. Try partial match if exact fails
+                if match.size().getInfo() == 0:
+                    match = pakistan_fc.filter(
+                        ee.Filter.stringContains("ADM2_NAME", search_term)
+                    )
+
+                # 3. Last fallback: search for Provinces/Regions
+                if match.size().getInfo() == 0:
+                    prov_fc = ee.FeatureCollection("FAO/GAUL/2015/level1").filter(
+                        ee.Filter.eq("ADM0_NAME", "Pakistan")
+                    )
+                    match = prov_fc.filter(
+                        ee.Filter.stringContains("ADM1_NAME", search_term)
+                    )
+
+                if match.size().getInfo() > 0:
+                    feat = match.first()
+                    props = feat.toDictionary().getInfo()
+                    # Get the official administrative name (Tehsil/District)
+                    official_name = (
+                        props.get("ADM2_NAME") or props.get("ADM1_NAME") or search_term
+                    )
+
+                    geom = shape(feat.geometry().getInfo())
+                    display_name = f"{official_name} (Search)"
+                    st.sidebar.success(f"Verified Area: {official_name}")
+                else:
+                    st.sidebar.warning(
+                        f"'{search_name}' not found. Using selection instead."
+                    )
+
+        if geom is None:
+            if analysis_scale == "National":
+                # Pakistan full boundary
+                country = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017").filter(
+                    ee.Filter.eq("country_na", "Pakistan")
+                )
+                if country.size().getInfo() > 0:
+                    geom = shape(country.first().geometry().getInfo())
+                    display_name = "Pakistan (National)"
+                else:
+                    st.error("Could not fetch National boundary from GEE.")
+            elif analysis_scale == "Province":
+                # FAO Level 1 for provinces - use robust matching
                 prov_fc = ee.FeatureCollection("FAO/GAUL/2015/level1").filter(
                     ee.Filter.eq("ADM0_NAME", "Pakistan")
                 )
-                match = prov_fc.filter(
-                    ee.Filter.stringContains("ADM1_NAME", search_term)
-                )
+                match = prov_fc.filter(ee.Filter.stringContains("ADM1_NAME", district))
 
-            if match.size().getInfo() > 0:
-                feat = match.first()
-                props = feat.toDictionary().getInfo()
-                # Get the official administrative name (Tehsil/District)
-                official_name = (
-                    props.get("ADM2_NAME") or props.get("ADM1_NAME") or search_term
-                )
+                if match.size().getInfo() > 0:
+                    geom = shape(match.first().geometry().getInfo())
+                    display_name = f"{district} (Province)"
+                else:
+                    st.error(f"Could not find Province boundary for '{district}' in GEE.")
 
-                geom = shape(feat.geometry().getInfo())
-                display_name = f"{official_name} (Search)"
-                st.sidebar.success(f"Verified Area: {official_name}")
-            else:
-                st.sidebar.warning(
-                    f"'{search_name}' not found. Using selection instead."
-                )
+            # Final fallback if GEE fails or for standard District mode
+            if geom is None:
+                # Dropdown district
+                try:
+                    row = gdf[gdf["__district_name__"] == district].iloc[0]
+                    geom = row["geometry"]
+                except:
+                    # Absolute fallback to first district if everything fails
+                    row = gdf.iloc[0]
+                    geom = row["geometry"]
+                    display_name = row["__district_name__"]
 
-    if geom is None:
-        if analysis_scale == "National":
-            # Pakistan full boundary
-            country = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017").filter(
-                ee.Filter.eq("country_na", "Pakistan")
-            )
-            if country.size().getInfo() > 0:
-                geom = shape(country.first().geometry().getInfo())
-                display_name = "Pakistan (National)"
-            else:
-                st.error("Could not fetch National boundary from GEE.")
-        elif analysis_scale == "Province":
-            # FAO Level 1 for provinces - use robust matching
-            prov_fc = ee.FeatureCollection("FAO/GAUL/2015/level1").filter(
-                ee.Filter.eq("ADM0_NAME", "Pakistan")
-            )
-            match = prov_fc.filter(ee.Filter.stringContains("ADM1_NAME", district))
+        ee_geom = shapely_to_ee(geom)
+        district = display_name
 
-            if match.size().getInfo() > 0:
-                geom = shape(match.first().geometry().getInfo())
-                display_name = f"{district} (Province)"
-            else:
-                st.error(f"Could not find Province boundary for '{district}' in GEE.")
-
-        # Final fallback if GEE fails or for standard District mode
-        if geom is None:
-            # Dropdown district
-            try:
-                row = gdf[gdf["__district_name__"] == district].iloc[0]
-                geom = row["geometry"]
-            except:
-                # Absolute fallback to first district if everything fails
-                row = gdf.iloc[0]
-                geom = row["geometry"]
-                display_name = row["__district_name__"]
-
-    ee_geom = shapely_to_ee(geom)
-    district = display_name
-
-    # Calculate bbox
-    minx, miny, maxx, maxy = geom.bounds
-    w_deg = maxx - minx
-    h_deg = maxy - miny
-    buffer_percent = 0.05 if analysis_scale in ["Province", "National"] else 0.15
-    bbox = [
-        minx - w_deg * buffer_percent,
-        miny - h_deg * buffer_percent,
-        maxx + w_deg * buffer_percent,
-        maxy + h_deg * buffer_percent,
-    ]
-
-    # ── Dynamic Resolution Calculation ──
-    # Target resolution: ~1000m for National/Province, ~80m for District
-    target_res_m = 1000 if analysis_scale in ["Province", "National"] else 80
-
-    pixels_w = int((w_deg * 1.1) * 111000 / target_res_m)
-    pixels_h = int((h_deg * 1.1) * 111000 / target_res_m)
-
-    # Full-district resolution: sizes beyond 1024 px are fetched as an aligned
-    # tile mosaic (see fetch_current_sar_image), so big districts keep ~80 m/px.
-    # 4096 px caps memory (~64 MB float32) and UNet inference time.
-    final_size = max(256, min(4096, max(pixels_w, pixels_h)))
-
-    # 1) Historical 2010 mask
-    if "hist_flood_mask" not in st.session_state:
-        with st.spinner("Computing 2010 flood mask (Landsat via GEE)..."):
-            pakistan_bbox = ee.Geometry.BBox(60.0, 23.0, 77.5, 37.5)
-            hist_flood_mask, _, _ = get_flood_mask(pakistan_bbox)
-            st.session_state["hist_flood_mask"] = hist_flood_mask
-
-    with st.spinner("Computing 2010 flood %..."):
-        pct_2010 = flood_percent_for_district(
-            ee_geom, st.session_state["hist_flood_mask"]
-        )
-
-    # 2) Current (Sentinel-1 + U-Net)
-    model = load_model_cached()
-    with st.spinner(f"Fetching Sentinel-1 SAR ({final_size}px)..."):
-        sar_bytes = fetch_current_sar_image(
-            bbox=bbox,
-            date_start=str(start_date),
-            date_end=str(end_date),
-            size=final_size,
-        )
-
-    with st.spinner("Running Tiled UNet analysis..."):
-        unet_result = predict_flood(model, sar_bytes, district, bbox)
-
-    pct_current = unet_result["water_coverage_pct"]
-    risk_score = unet_result["risk_score"]
-    settlement_risk = unet_result["settlement_risk"]
-
-    # 3) River flows (FFC)
-    @st.cache_data(ttl=300)
-    def get_river_flows_cached():
-        return get_ffc_data()
-
-    with st.spinner("Scraping FFC river discharge data..."):
-        river_flows = get_river_flows_cached()
-
-    df_flows = pd.DataFrame(river_flows)
-    matched_station = match_station_to_district(district, river_flows)
-
-    # 4) Gemini AI insights
-    with st.spinner("Generating evidence-based strategic insights..."):
-        ai = FloodAI()
-        # Calculate the defensible risk score using our new engine logic
-        risk_score = ai.calculate_defensible_risk(
-            {
-                "flood_pct_current": pct_current,
-                "flood_pct_2010": pct_2010,
-                "river_status": (
-                    matched_station["status"] if matched_station else "UNKNOWN"
-                ),
-            },
-            river_flows,
-        )
-
-        summary_for_ai = [
-            {
-                "district": district,
-                "flood_pct_current": pct_current,
-                "flood_pct_2010": pct_2010,
-                "risk_score": risk_score,
-                "river_status": (
-                    matched_station["status"] if matched_station else "UNKNOWN"
-                ),
-                "settlement_risk": settlement_risk,
-            }
+        # Calculate bbox
+        minx, miny, maxx, maxy = geom.bounds
+        w_deg = maxx - minx
+        h_deg = maxy - miny
+        buffer_percent = 0.05 if analysis_scale in ["Province", "National"] else 0.15
+        bbox = [
+            minx - w_deg * buffer_percent,
+            miny - h_deg * buffer_percent,
+            maxx + w_deg * buffer_percent,
+            maxy + h_deg * buffer_percent,
         ]
-        insights = ai.generate_insights(summary_for_ai, river_flows)
 
-    # 4b) Personal flood-alert email (Response & Communication Agent)
-    _maybe_send_flood_alert(
-        recipient_email=recipient_email,
-        always_email=always_email,
-        district=district,
-        risk_score=risk_score,
-        coverage_pct=pct_current,
-        affected_area_km2=unet_result.get("affected_area_km2", 0.0),
-        geom=geom,
-        bbox=bbox,
-        pred_mask=unet_result.get("pred_mask"),
-    )
+        # ── Dynamic Resolution Calculation ──
+        # Target resolution: ~1000m for National/Province, ~80m for District
+        target_res_m = 1000 if analysis_scale in ["Province", "National"] else 80
 
-    # 5) Visuals
-    sar_gray = render_sar_gray(unet_result["display_arr"])
-    overlay_img = render_unet_overlay(
-        unet_result["display_arr"], unet_result["pred_mask"]
-    )
-    prob_heatmap = render_prob_heatmap(unet_result["pred_prob"])
+        pixels_w = int((w_deg * 1.1) * 111000 / target_res_m)
+        pixels_h = int((h_deg * 1.1) * 111000 / target_res_m)
 
-    with st.spinner("Aligning 2010 historical visuals..."):
-        # PNG visualisation stays a single GEE request — cap at 1024 px.
-        hist_mask_bytes = fetch_2010_mask_image(
-            st.session_state["hist_flood_mask"], bbox=bbox, size=min(final_size, 1024)
+        # Full-district resolution: sizes beyond 1024 px are fetched as an aligned
+        # tile mosaic (see fetch_current_sar_image), so big districts keep ~80 m/px.
+        # 4096 px caps memory (~64 MB float32) and UNet inference time.
+        final_size = max(256, min(4096, max(pixels_w, pixels_h)))
+
+        # 1) Historical 2010 mask
+        if "hist_flood_mask" not in st.session_state:
+            with st.spinner("Computing 2010 flood mask (Landsat via GEE)..."):
+                pakistan_bbox = ee.Geometry.BBox(60.0, 23.0, 77.5, 37.5)
+                hist_flood_mask, _, _ = get_flood_mask(pakistan_bbox)
+                st.session_state["hist_flood_mask"] = hist_flood_mask
+
+        with st.spinner("Computing 2010 flood %..."):
+            pct_2010 = flood_percent_for_district(
+                ee_geom, st.session_state["hist_flood_mask"]
+            )
+
+        # 2) Current (Sentinel-1 + U-Net)
+        model = load_model_cached()
+        with st.spinner(f"Fetching Sentinel-1 SAR ({final_size}px)..."):
+            sar_bytes = fetch_current_sar_image(
+                bbox=bbox,
+                date_start=str(start_date),
+                date_end=str(end_date),
+                size=final_size,
+            )
+
+        with st.spinner("Running Tiled UNet analysis..."):
+            unet_result = predict_flood(model, sar_bytes, district, bbox)
+
+        pct_current = unet_result["water_coverage_pct"]
+        risk_score = unet_result["risk_score"]
+        settlement_risk = unet_result["settlement_risk"]
+
+        # 3) River flows (FFC)
+        @st.cache_data(ttl=300)
+        def get_river_flows_cached():
+            return get_ffc_data()
+
+        with st.spinner("Scraping FFC river discharge data..."):
+            river_flows = get_river_flows_cached()
+
+        df_flows = pd.DataFrame(river_flows)
+        matched_station = match_station_to_district(district, river_flows)
+
+        # 4) Gemini AI insights
+        with st.spinner("Generating evidence-based strategic insights..."):
+            ai = FloodAI()
+            # Calculate the defensible risk score using our new engine logic
+            risk_score = ai.calculate_defensible_risk(
+                {
+                    "flood_pct_current": pct_current,
+                    "flood_pct_2010": pct_2010,
+                    "river_status": (
+                        matched_station["status"] if matched_station else "UNKNOWN"
+                    ),
+                },
+                river_flows,
+            )
+
+            summary_for_ai = [
+                {
+                    "district": district,
+                    "flood_pct_current": pct_current,
+                    "flood_pct_2010": pct_2010,
+                    "risk_score": risk_score,
+                    "river_status": (
+                        matched_station["status"] if matched_station else "UNKNOWN"
+                    ),
+                    "settlement_risk": settlement_risk,
+                }
+            ]
+            insights = ai.generate_insights(summary_for_ai, river_flows)
+
+        # 4b) Personal flood-alert email (Response & Communication Agent)
+        _maybe_send_flood_alert(
+            recipient_email=recipient_email,
+            always_email=always_email,
+            district=district,
+            risk_score=risk_score,
+            coverage_pct=pct_current,
+            affected_area_km2=unet_result.get("affected_area_km2", 0.0),
+            geom=geom,
+            bbox=bbox,
+            pred_mask=unet_result.get("pred_mask"),
         )
+
+        # 5) Visuals
+        sar_gray = render_sar_gray(unet_result["display_arr"])
+        overlay_img = render_unet_overlay(
+            unet_result["display_arr"], unet_result["pred_mask"]
+        )
+        prob_heatmap = render_prob_heatmap(unet_result["pred_prob"])
+
+        with st.spinner("Aligning 2010 historical visuals..."):
+            # PNG visualisation stays a single GEE request — cap at 1024 px.
+            hist_mask_bytes = fetch_2010_mask_image(
+                st.session_state["hist_flood_mask"], bbox=bbox, size=min(final_size, 1024)
+            )
+
+        # Persist everything the render section needs so widget interactions
+        # (view toggles, chat, etc.) don't wipe the page on rerun.
+        st.session_state["analysis"] = {
+            "district": district,
+            "geom": geom,
+            "bbox": bbox,
+            "start_date": start_date,
+            "end_date": end_date,
+            "pct_2010": pct_2010,
+            "pct_current": pct_current,
+            "risk_score": risk_score,
+            "settlement_risk": settlement_risk,
+            "unet_result": unet_result,
+            "matched_station": matched_station,
+            "df_flows": df_flows,
+            "river_flows": river_flows,
+            "insights": insights,
+            "sar_gray": sar_gray,
+            "overlay_img": overlay_img,
+            "prob_heatmap": prob_heatmap,
+            "hist_mask_bytes": hist_mask_bytes,
+        }
+
+    # ── Render from persisted results (survives widget-triggered reruns) ──
+    if "analysis" not in st.session_state:
+        return
+    a = st.session_state["analysis"]
+    district = a["district"]
+    geom = a["geom"]
+    bbox = a["bbox"]
+    start_date = a["start_date"]
+    pct_2010 = a["pct_2010"]
+    pct_current = a["pct_current"]
+    risk_score = a["risk_score"]
+    settlement_risk = a["settlement_risk"]
+    unet_result = a["unet_result"]
+    matched_station = a["matched_station"]
+    df_flows = a["df_flows"]
+    river_flows = a["river_flows"]
+    insights = a["insights"]
+    sar_gray = a["sar_gray"]
+    overlay_img = a["overlay_img"]
+    prob_heatmap = a["prob_heatmap"]
+    hist_mask_bytes = a["hist_mask_bytes"]
 
     st.divider()
 
