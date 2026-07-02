@@ -1,4 +1,15 @@
 import os
+import sys
+
+# Windows consoles often use cp1252, which cannot encode symbols that some
+# modules print (arrows, check marks). Never let a log line crash the app.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import io

@@ -19,7 +19,7 @@ class FloodAI:
                 self.gemini_model_name = "gemini-1.5-flash"
                 self.gemini_enabled = True
             except Exception as e:
-                print(f"⚠️ Gemini configuration failed: {e}")
+                print(f"Gemini configuration failed: {e}")
                 self.gemini_enabled = False
 
         # Groq Init (Secondary)
@@ -29,14 +29,14 @@ class FloodAI:
                 self.groq_client = Groq(api_key=groq_key.strip())
                 self.groq_enabled = True
             except Exception as e:
-                print(f"⚠️ Groq configuration failed: {e}")
+                print(f"Groq configuration failed: {e}")
                 self.groq_enabled = False
         else:
             self.groq_enabled = False
 
         self.enabled = self.gemini_enabled or self.groq_enabled
         if not self.enabled:
-            print("⚠️ No valid AI API keys (Gemini/Groq) found. AI insights will be simulated.")
+            print("No valid AI API keys (Gemini/Groq) found. AI insights will be simulated.")
 
     def calculate_defensible_risk(self, d, river_data):
         """

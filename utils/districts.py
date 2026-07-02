@@ -53,7 +53,7 @@ def flood_percent_for_district(district_geom: ee.Geometry, flood_mask: ee.Image)
         t_val = float(t_val) if t_val is not None else 0.0
         
         if f_val > 0:
-            print(f"    📈 Found {f_val} flood pixels out of {t_val}")
+            print(f"Found {f_val} flood pixels out of {t_val}")
 
         # Avoid division by zero
         if t_val > 0:
@@ -63,7 +63,7 @@ def flood_percent_for_district(district_geom: ee.Geometry, flood_mask: ee.Image)
         
         return round(pct, 4)
     except Exception as e:
-        print(f"    ⚠ Error computing pct: {e}")
+        print(f"Error computing pct: {e}")
         return 0.0
 
 
@@ -79,13 +79,13 @@ def detect_name_column(gdf: gpd.GeoDataFrame) -> str:
     ]
     for col in candidates:
         if col in gdf.columns:
-            print(f"  ✅ Using column '{col}' for district names")
+            print(f"Using column '{col}' for district names")
             return col
 
     # fallback: use first non-geometry string column
     for col in gdf.columns:
         if col != "geometry" and gdf[col].dtype == object:
-            print(f"  ⚠ Guessing column '{col}' for district names")
+            print(f"Guessing column '{col}' for district names")
             return col
 
     return None
@@ -106,7 +106,7 @@ def compute_district_flood(file_path: str) -> pd.DataFrame:
     Reads a GeoJSON (.json / .geojson) or Shapefile (.shp) and returns:
       district | flood_pct | geometry
     """
-    print(f"📂 Loading file: {file_path}")
+    print(f"Loading file: {file_path}")
     gdf = gpd.read_file(file_path)   
     print(f"   Total districts in file: {len(gdf)}")
 
@@ -122,7 +122,7 @@ def compute_district_flood(file_path: str) -> pd.DataFrame:
         # Case-insensitive partial matching to be safe
         mask = gdf[name_col].apply(lambda x: any(p.lower() in str(x).lower() for p in PRIORITY_DISTRICTS))
         gdf = gdf[mask].copy()
-        print(f"🎯 Filtered to {len(gdf)} priority districts.")
+        print(f"Filtered to {len(gdf)} priority districts.")
 
     # Full Pakistan bounding box for image filtering
     pakistan_bbox = ee.Geometry.BBox(60.0, 23.0, 77.5, 37.5)
@@ -138,9 +138,9 @@ def compute_district_flood(file_path: str) -> pd.DataFrame:
         try:
             ee_geom = shapely_to_ee(row.geometry)
             pct     = flood_percent_for_district(ee_geom, flood_mask)
-            print(f"  → flood: {pct:.4f}%")
+            print(f"-> flood: {pct:.4f}%")
         except Exception as e:
-            print(f"  ⚠ Skipped {name}: {e}")
+            print(f"Skipped {name}: {e}")
             pct = None
 
         records.append({

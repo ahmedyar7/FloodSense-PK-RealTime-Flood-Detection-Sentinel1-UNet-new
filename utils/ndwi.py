@@ -69,7 +69,7 @@ def get_water_mask(start_date: str, end_date: str, region: ee.Geometry,
     )
 
     count = int(collection.size().getInfo())
-    print(f"  📸 Images found ({start_date} → {end_date}): {count}")
+    print(f"Images found ({start_date} -> {end_date}): {count}")
 
     if count == 0:
         return ee.Image.constant(0).rename("water").clip(region)
@@ -88,10 +88,10 @@ def get_flood_mask(region: ee.Geometry):
     Returns only NEW flood water:
       new_flood = (water in flood period) AND NOT (water in baseline)
     """
-    print(f"🛰  Loading baseline ({BASELINE_START} → {BASELINE_END})...")
+    print(f"Loading baseline ({BASELINE_START} -> {BASELINE_END})...")
     baseline = get_water_mask(BASELINE_START, BASELINE_END, region, cloud_pct=70, use_max=False)
 
-    print(f"🛰  Loading flood period ({FLOOD_START} → {FLOOD_END})...")
+    print(f"Loading flood period ({FLOOD_START} -> {FLOOD_END})...")
     # Use max() for flood to capture the extent
     flood    = get_water_mask(FLOOD_START, FLOOD_END, region, cloud_pct=90, use_max=True)
 

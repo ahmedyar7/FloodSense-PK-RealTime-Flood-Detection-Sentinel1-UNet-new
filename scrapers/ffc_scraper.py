@@ -38,9 +38,9 @@ def save_cache(data):
             os.makedirs(CACHE_DIR, exist_ok=True)
         with open(CACHE_FILE, "w") as f:
             json.dump(data, f, indent=4)
-        print(f"✅ Cache updated: {CACHE_FILE}")
+        print(f"Cache updated: {CACHE_FILE}")
     except Exception as e:
-        print(f"⚠️ Failed to save cache: {e}")
+        print(f"Failed to save cache: {e}")
 
 def load_cache():
     """Loads data from the JSON cache file."""
@@ -48,10 +48,10 @@ def load_cache():
         if os.path.exists(CACHE_FILE):
             with open(CACHE_FILE, "r") as f:
                 data = json.load(f)
-            print(f"ℹ️ Loaded fallback data from {CACHE_FILE}")
+            print(f"ℹ Loaded fallback data from {CACHE_FILE}")
             return data
     except Exception as e:
-        print(f"❌ Failed to load cache: {e}")
+        print(f"Failed to load cache: {e}")
     return []
 
 def get_ffc_data():
@@ -143,19 +143,19 @@ def get_ffc_data():
             return data
 
     except Exception as e:
-        print(f"❌ FFD Fetch Error: {e}")
+        print(f"FFD Fetch Error: {e}")
 
     # Fallback to cache if live fetch fails or returns no data
-    print("⚠️ Live fetch failed. Attempting to use cached data...")
+    print("Live fetch failed. Attempting to use cached data...")
     return load_cache()
 
 
 def main():
     data = get_ffc_data()
-    print(f"\n🌊 FFD High-Fidelity River Data ({len(data)} stations)\n")
+    print(f"\n FFD High-Fidelity River Data ({len(data)} stations)\n")
     for d in data:
         print(
-            f"{d['station']} ({d['river']}) → "
+            f"{d['station']} ({d['river']}) -> "
             f"Inflow: {d['inflow']} ({d['inflow_trend']}) | "
             f"Outflow: {d['outflow']} ({d['outflow_trend']}) | "
             f"Status: {d['status']}"
