@@ -682,10 +682,29 @@ def load_districts_cached():
 
 @st.cache_resource
 def init_rag_system():
-    """Load and index all disaster knowledge documents into an in-memory Qdrant collection."""
-    client = QdrantClient(":memory:")
+    """Connect to Qdrant and ensure the disaster-knowledge collection is populated.
+
+    Prefers the persistent Docker Qdrant on ``localhost:6333`` (so the collection
+    shows up in the dashboard and survives restarts), falling back to an in-memory
+    instance if Docker isn't reachable. Ingestion only runs when the collection is
+    missing or empty, so restarts don't re-embed or create duplicate points.
+    """
+    from rag.ingest import COLLECTION_NAME
+
     embedder = EmbeddingPipeline()
-    ingest_documents(client, embedder)
+    try:
+        client = QdrantClient(url="http://localhost:6333", timeout=5)
+        client.get_collections()  # probe: raises if Docker Qdrant isn't up
+    except Exception:
+        client = QdrantClient(":memory:")
+
+    collections = {c.name for c in client.get_collections().collections}
+    populated = (
+        COLLECTION_NAME in collections
+        and client.count(COLLECTION_NAME).count > 0
+    )
+    if not populated:
+        ingest_documents(client, embedder)
     return client, embedder
 
 
